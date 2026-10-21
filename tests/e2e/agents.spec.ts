@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { fakeHermes } from '../helpers/hermes.js';
+import { fakeOpencode } from '../helpers/opencode.js';
 import { screenshots } from './env';
 
 test('Agents : configuration réelle, découverte, demande, accord, profil et affichage mobile', async ({
@@ -291,4 +292,64 @@ test('Agents sans personne : Hermes expliqué et un bouton pour ajouter quelqu�
   await expect(
     page.getByRole('heading', { level: 1, name: 'Le foyer et les visages' }),
   ).toBeVisible();
+});
+
+test('Agents : opencode relié sans jeton Hermes, demande transmise et permission accordée', async ({
+  page,
+}) => {
+  const fake = await fakeOpencode();
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  try {
+    await page.goto('/admin');
+    await page
+      .getByLabel('Mot de passe administrateur')
+      .fill('admin-browser-test-only-credentials-1234');
+    await page.getByRole('button', { name: 'Ouvrir cet espace' }).click();
+    await page.getByRole('button', { name: 'Le foyer et les visages', exact: true }).click();
+    await page.getByLabel('Prénom ou nom d’affichage').fill('Chloé opencode');
+    await page.getByRole('button', { name: 'Ajouter au foyer', exact: true }).click();
+    const profiles = (await (await page.request.get('/api/admin/profiles')).json()) as {
+      id: string;
+      name: string;
+    }[];
+    const chloe = profiles.find((p) => p.name === 'Chloé opencode')!;
+    await page.getByRole('button', { name: 'Agents', exact: true }).click();
+    await page.getByLabel('Agent de', { exact: true }).selectOption(chloe.id);
+    await page.getByLabel('Type d’agent', { exact: true }).selectOption('opencode');
+    await expect(page.getByText('Relier opencode', { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: 'opencode de Chloé opencode', exact: true }),
+    ).toBeVisible();
+    await page.getByLabel('Adresse de opencode', { exact: true }).fill(fake.url);
+    await page.getByLabel('Mot de passe (facultatif)', { exact: true }).fill(fake.password!);
+    await page.getByRole('switch', { name: 'Autoriser Cornelius à contacter cet agent' }).click();
+    await page.getByRole('button', { name: 'Enregistrer et vérifier', exact: true }).click();
+    const overview = page.getByRole('region', { name: 'Vue d’ensemble de opencode' });
+    await expect(overview.getByText('Disponible pour Cornelius', { exact: true })).toBeVisible();
+    await expect(page.getByText('Mot de passe enregistré', { exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'Capacités', exact: true }).click();
+    await expect(page.getByText(/\/Users\/alice\/site/u)).toBeVisible();
+    await page.getByRole('tab', { name: 'Demandes', exact: true }).click();
+    await page.getByLabel('Message à opencode', { exact: true }).fill('Corrige le bug du menu');
+    await page.getByRole('button', { name: 'Envoyer à opencode', exact: true }).click();
+    await expect.poll(() => fake.sessions.size).toBe(1);
+    const session = [...fake.sessions.keys()][0]!;
+    fake.permissions.push({
+      id: 'per_browser',
+      sessionID: session,
+      permission: 'edit',
+      patterns: ['src/menu.ts'],
+    });
+    await page.getByRole('button', { name: 'Actualiser les tâches', exact: true }).click();
+    await expect(page.getByText('opencode demande votre accord', { exact: true })).toBeVisible();
+    await expect(page.getByText(/src\/menu\.ts/u)).toBeVisible();
+    await page.getByRole('button', { name: 'Autoriser cette fois', exact: true }).click();
+    await expect
+      .poll(() => fake.calls.some((call) => call.path === '/permission/per_browser/reply'))
+      .toBe(true);
+    expect(errors).toEqual([]);
+  } finally {
+    await fake.close();
+  }
 });

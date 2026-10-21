@@ -8,6 +8,8 @@ Hermes est un agent personnel développé par Nous Research, indépendant de Cor
 
 Cornelius sert d’interface vocale et visuelle. Il transmet la demande à Hermes, suit son avancement et rapporte la réponse. C’est Hermes qui choisit et exécute ses outils, demande ses confirmations et gère ses tâches. Cornelius ne refait jamais une action de Hermes avec ses propres modules.
 
+Une personne peut aussi être reliée à l’agent de code opencode à la place de Hermes : voir [L’agent de code opencode](agent-opencode.md).
+
 La connexion est facultative et propre à chaque personne. Aucun agent n’est proposé au foyer en général, ni à un visiteur inconnu.
 
 ## Préparer Hermes

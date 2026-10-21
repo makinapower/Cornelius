@@ -6,6 +6,17 @@ Le fonctionnement actuel est décrit dans la [documentation](docs/README.md). Ce
 
 ## Non publié
 
+### 2026-10-21 : agent de code opencode
+
+**Ajouté**
+
+- Une personne peut être reliée à opencode (`opencode serve`) au lieu de Hermes : demandes à la voix, suivi, suite dans la même session, arrêt, permissions validées dans l’administration et réponses à ses questions. Voir [L’agent de code opencode](docs/fonctionnalites/agent-opencode.md).
+- Administration : **Type d’agent** (Hermes ou opencode) dans **Agents → Connexion** ; mot de passe facultatif pour opencode.
+
+**Modifié**
+
+- `server/agents.ts` passe par une interface commune aux agents (`server/agent-backend.ts`) ; Hermes (`server/hermes-client.ts`) et opencode (`server/opencode-client.ts`) l’implémentent. Le type d’agent est gardé dans la table `agent_connection_kinds`.
+
 ### 2026-10-21 : conversation locale
 
 **Ajouté**

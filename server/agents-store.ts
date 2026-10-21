@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AgentConnectionView, AgentDiscovery, AgentTaskStatus } from '../shared/agents.js';
+import type {
+  AgentConnectionView,
+  AgentDiscovery,
+  AgentKind,
+  AgentTaskStatus,
+} from '../shared/agents.js';
 import type { Scope } from '../shared/types.js';
 
 export const agentsMigration = `
@@ -21,6 +26,11 @@ CREATE TABLE agent_tasks (
 ) STRICT;
 CREATE INDEX agent_tasks_owner ON agent_tasks(profile_id,created_at);
 `;
+/** Type d’agent de chaque connexion ; sans ligne, Hermes (connexions d’avant opencode). */
+export const agentKindMigration = `CREATE TABLE IF NOT EXISTS agent_connection_kinds (
+  profile_id TEXT PRIMARY KEY REFERENCES agent_connections(profile_id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('hermes', 'opencode'))
+) STRICT;`;
 export interface AgentConnection extends AgentConnectionView {
   id: string;
   token: string;
@@ -48,11 +58,17 @@ export class AgentRepository {
     return !!this.db.prepare('SELECT id FROM profiles WHERE id=?').get(id);
   }
   get(profileId: string): AgentConnection | null {
-    const r = this.db.prepare('SELECT * FROM agent_connections WHERE profile_id=?').get(profileId);
+    const r = this.db
+      .prepare(
+        `SELECT c.*, k.kind FROM agent_connections c
+        LEFT JOIN agent_connection_kinds k ON k.profile_id = c.profile_id WHERE c.profile_id=?`,
+      )
+      .get(profileId);
     return r
       ? {
           id: String(r.id),
           profileId,
+          kind: (String(r.kind ?? 'hermes') === 'opencode' ? 'opencode' : 'hermes') as AgentKind,
           url: String(r.url),
           token: String(r.token),
           hasToken: !!r.token,
@@ -65,7 +81,14 @@ export class AgentRepository {
   }
   save(
     profileId: string,
-    input: { url: string; token: string; enabled: boolean; description: string; revision: number },
+    input: {
+      kind?: AgentKind;
+      url: string;
+      token: string;
+      enabled: boolean;
+      description: string;
+      revision: number;
+    },
   ) {
     const current = this.get(profileId);
     if (!this.hasProfile(profileId)) throw new Error('Profil introuvable.');
@@ -86,6 +109,12 @@ export class AgentRepository {
         Number(input.enabled),
         input.description,
       );
+    this.db
+      .prepare(
+        `INSERT INTO agent_connection_kinds(profile_id,kind) VALUES(?,?)
+        ON CONFLICT(profile_id) DO UPDATE SET kind=excluded.kind`,
+      )
+      .run(profileId, input.kind ?? 'hermes');
     return this.get(profileId)!;
   }
   discovery(c: AgentConnection, result: AgentDiscovery) {
