@@ -48,6 +48,7 @@ fi
 
 launch_server "$port"
 if [ "$perception" = 1 ]; then launch_perception; fi
+launch_voice
 
 echo
 wait_server "$port" "$timeout"

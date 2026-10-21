@@ -41,3 +41,63 @@ export function createMemoryExtractor(
     return JSON.parse(response.output_text) as unknown;
   };
 }
+
+/**
+ * Conversation locale : la mémoire est extraite par le même LLM local (chat completions avec
+ * un schéma JSON). Le serveur valide toujours la proposition avant de l’appliquer.
+ */
+export function createLocalMemoryExtractor(
+  llm: { baseUrl: string; model: string | null; apiKey: string | null },
+  fetch: typeof globalThis.fetch = globalThis.fetch,
+): MemoryExtractor {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(llm.apiKey ? { Authorization: 'Bearer ' + llm.apiKey } : {}),
+  };
+  let model: Promise<string> | null = null;
+  const resolveModel = () =>
+    llm.model
+      ? Promise.resolve(llm.model)
+      : (model ??= fetch(llm.baseUrl + '/models', { headers })
+          .then((response) => response.json() as Promise<{ data?: { id?: unknown }[] }>)
+          .then((body) => {
+            const id = body.data?.find((entry) => typeof entry.id === 'string')?.id;
+            if (typeof id !== 'string') throw new Error('Aucun modèle dans le LLM local.');
+            return id;
+          })
+          .catch((error: unknown) => {
+            model = null;
+            throw error;
+          }));
+  return async (input, signal) => {
+    const response = await fetch(llm.baseUrl + '/chat/completions', {
+      method: 'POST',
+      headers,
+      signal,
+      body: JSON.stringify({
+        model: await resolveModel(),
+        temperature: 0,
+        max_tokens: 6000,
+        messages: [
+          { role: 'system', content: memoryExtractionInstructions },
+          { role: 'user', content: JSON.stringify(input) },
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'memory_changes',
+            strict: true,
+            schema: strictSchema(schema) as Record<string, unknown>,
+          },
+        },
+      }),
+    });
+    if (!response.ok) throw new Error('Extraction locale refusée (HTTP ' + response.status + ').');
+    const body = (await response.json()) as { choices?: { message?: { content?: unknown } }[] };
+    const content = body.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content) throw new Error('Extraction incomplète.');
+    // Un modèle « thinking » peut précéder le JSON de son raisonnement.
+    const json = content.replace(/<think>[\s\S]*?<\/think>/gu, '').trim();
+    return JSON.parse(json) as unknown;
+  };
+}

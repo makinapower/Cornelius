@@ -13,7 +13,7 @@ import type {
 import { VISION_DEVICES, VISION_MODELS, VISION_MODES } from '../shared/types.js';
 import { compile } from '../shared/validation.js';
 import type { SessionController } from './controller.js';
-import type { LiveTransport } from './live/transport.js';
+import { LOCAL_BROWSER_AUDIO_RATE, type LiveTransport } from './live/transport.js';
 import type { PerceptionBridge } from './perception.js';
 import type { WakeArbiter } from './wake-arbiter.js';
 import type { ModelDownloads } from './model-downloads.js';
@@ -63,6 +63,9 @@ export function registerHardware(
 ) {
   const { live, controller, perception, authorize } = services;
   const audioCatchupSenders = new Map<string, () => void>();
+  // Conversation locale : la voix de Cornelius part par le WebSocket /audio de l’interaction.
+  const audioOutputs = new Map<string, (pcm: Buffer) => void>();
+  live?.attachBrowserOutput((interactionId, pcm) => audioOutputs.get(interactionId)?.(pcm));
   live?.onFirstAssistantResponse((scope) => {
     const interactionId = scope.interactionId;
     if (interactionId) audioCatchupSenders.get(interactionId)?.();
@@ -332,8 +335,16 @@ export function registerHardware(
         if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'audio_catchup' }));
       };
       audioCatchupSenders.set(id, sendAudioCatchup);
+      const sendAudioOutput = (pcm: Buffer) => {
+        if (socket.readyState === 1 && socket.bufferedAmount < 1_000_000) socket.send(pcm);
+      };
+      if (live.isLocal()) {
+        audioOutputs.set(id, sendAudioOutput);
+        socket.send(JSON.stringify({ type: 'audio_format', rate: LOCAL_BROWSER_AUDIO_RATE }));
+      }
       socket.on('close', () => {
         if (audioCatchupSenders.get(id) === sendAudioCatchup) audioCatchupSenders.delete(id);
+        if (audioOutputs.get(id) === sendAudioOutput) audioOutputs.delete(id);
       });
       socket.on('message', (data, binary) => {
         const state = controller.sessionState();
@@ -344,7 +355,9 @@ export function registerHardware(
           !services.currentKiosk(req)
         )
           return socket.close(1008, 'Session média périmée.');
-        perception.audio(id, Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
+        const pcm = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+        perception.audio(id, pcm);
+        live.browserAudio(id, pcm);
       });
       socket.on('error', () => socket.close());
     },

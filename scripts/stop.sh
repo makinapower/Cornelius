@@ -8,7 +8,7 @@ set -euo pipefail
 
 init_dirs
 stopped=()
-for name in perception frontend backend; do
+for name in voice perception frontend backend; do
   pid="$(read_pid "$name")"
   if [ -n "$pid" ] && stop_pid "$pid"; then stopped+=("$name (PID $pid)"); fi
   rm -f "$RUN_DIR/$name.pid"
@@ -19,7 +19,7 @@ for port in 5173 "$(server_port)"; do
   owner="$(port_owner "$port")"
   if [ -n "$owner" ] && stop_pid "$owner"; then stopped+=("port $port (PID $owner)"); fi
 done
-for pattern in 'perception/worker.py' 'image_generation/worker.py'; do
+for pattern in 'perception/worker.py' 'image_generation/worker.py' '.venv-voice/bin/mlx_audio.server'; do
   for pid in $(worker_pids "$pattern"); do
     if stop_pid "$pid"; then stopped+=("$pattern (PID $pid)"); fi
   done

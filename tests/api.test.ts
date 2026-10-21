@@ -10,6 +10,7 @@ import type { WebSocket } from 'ws';
 import { createApp } from '../server/app.js';
 import type { AppConfig } from '../server/config.js';
 import type { PerceptionObservation, StateEvent } from '../shared/types.js';
+import { localConversationConfig } from '../server/live/local-gateway.js';
 
 const origin = 'http://localhost';
 const password = 'mot-de-passe-test-1234';
@@ -127,6 +128,18 @@ test('le miroir est public et les droits administrateur restent protégés', asy
     assert.equal(response.statusCode, 401, `${method} ${url}`);
   }
   assert.equal(f.profiles.list().length, 0);
+});
+
+test('conversation locale : aucune clé OpenAI demandée pour converser', async (t) => {
+  const f = await fixture(t, {
+    openaiKey: undefined,
+    localConversation: localConversationConfig({ CORNELIUS_CONVERSATION: 'local' }),
+  });
+  const state = await f.app.inject({ url: '/api/state' });
+  assert.equal(state.json().state.setup.openaiKey, true);
+  const cookie = await f.login();
+  const devices = (await f.app.inject({ url: '/api/admin/devices', headers: { cookie } })).json();
+  assert.equal(devices.apiConfigured, true);
 });
 
 test('l’état diffusé dit ce qui manque au premier lancement sans exposer aucun secret', async (t) => {

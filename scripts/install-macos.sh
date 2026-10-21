@@ -6,6 +6,7 @@
 #   --wake                installe le mot d’appel local (openWakeWord)
 #   --no-models           ne télécharge pas les modèles (visages, voix, vision 450m)
 #   --no-build            ne compile pas l’interface
+#   --local               conversation 100 % locale : LLM oMLX, voix et transcription mlx-audio
 #   --launchd             installe et démarre les services launchd (serveur, perception)
 #   -h, --help            affiche cette aide
 #
@@ -19,6 +20,7 @@ wake=0
 models=1
 build=1
 launchd=0
+local_voice=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --system-deps) system_deps=1 ;;
@@ -26,7 +28,8 @@ while [ $# -gt 0 ]; do
     --no-models) models=0 ;;
     --no-build) build=0 ;;
     --launchd) launchd=1 ;;
-    -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --local) local_voice=1 ;;
+    -h | --help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Option inconnue : $1 (voir --help)" >&2; exit 2 ;;
   esac
   shift
@@ -34,6 +37,10 @@ done
 
 # Version de uv utilisée seulement si Python 3.12 manque au système.
 UV_VERSION=0.12.23
+# Serveur de voix de la conversation locale (transcription Whisper, voix Kokoro).
+MLX_AUDIO_VERSION=0.5.8
+MISAKI_VERSION=0.9.4
+PHONEMIZER_VERSION=3.3.0
 # Préfixe des services launchd (~/Library/LaunchAgents).
 LABEL=fr.cornelius
 
@@ -67,6 +74,8 @@ if [ "$system_deps" = 1 ]; then
   step "Paquets Homebrew"
   [ -n "$brew_bin" ] || die "Homebrew est absent : installez-le depuis https://brew.sh puis relancez."
   "$brew_bin" install git node@24 python@3.12
+  # Voix française de Kokoro : phonèmes d’espeak-ng.
+  if [ "$local_voice" = 1 ]; then "$brew_bin" install espeak-ng; fi
   for formula in node@24 python@3.12; do
     PATH="$("$brew_bin" --prefix "$formula")/bin:$PATH"
   done
@@ -145,6 +154,24 @@ if [ "$wake" = 1 ]; then
   [ -f models/cornelius.onnx ] || warn "placez le modèle du mot d’appel dans models/cornelius.onnx (docs/fonctionnalites/mot-d-appel.md)."
 fi
 
+# --- Conversation locale -------------------------------------------------------------------
+if [ "$local_voice" = 1 ]; then
+  step "Conversation locale (mlx-audio)"
+  # Environnement séparé : MLX et Transformers ne touchent pas aux versions de la perception.
+  [ -x .venv-voice/bin/python ] || .venv/bin/python -m venv .venv-voice
+  .venv-voice/bin/python -m pip install --disable-pip-version-check --quiet --upgrade pip
+  .venv-voice/bin/python -m pip install --disable-pip-version-check \
+    "mlx-audio[server]==$MLX_AUDIO_VERSION" "misaki==$MISAKI_VERSION" "phonemizer==$PHONEMIZER_VERSION"
+  [ -n "$(espeak_library)" ] || warn "espeak-ng est absent : brew install espeak-ng (voix française)."
+  if ! grep -q '^CORNELIUS_CONVERSATION=' .env; then
+    printf '\n# Conversation locale : LLM oMLX (port 8000), voix mlx-audio (port %s).\nCORNELIUS_CONVERSATION=local\n' \
+      "$VOICE_PORT" >>.env
+  fi
+  grep -q '^CORNELIUS_CONVERSATION=local' .env ||
+    warn ".env choisit une autre conversation : mettez CORNELIUS_CONVERSATION=local."
+  echo "Lancez oMLX (port 8000) avec un modèle qui sait appeler des outils (Qwen3, Gemma 3…)."
+fi
+
 # --- Caméra ---------------------------------------------------------------------------------
 step "Caméra"
 if cameras="$(.venv/bin/python -c 'from cv2_enumerate_cameras import enumerate_cameras
@@ -187,6 +214,12 @@ PLIST
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>$(xml "$(dirname "$NODE_BIN"):/usr/bin:/bin:/usr/sbin:/sbin")</string>
+PLIST
+      if [ -n "${VOICE_ENVIRONMENT:-}" ]; then
+        printf '    <key>%s</key><string>%s</string>\n' \
+          "$(xml "${VOICE_ENVIRONMENT%%=*}")" "$(xml "${VOICE_ENVIRONMENT#*=}")"
+      fi
+      cat <<PLIST
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -205,11 +238,20 @@ PLIST
   # elle occuperait le port des services.
   launchctl bootout "$domain/$LABEL.perception" 2>/dev/null || true
   launchctl bootout "$domain/$LABEL.server" 2>/dev/null || true
+  launchctl bootout "$domain/$LABEL.voice" 2>/dev/null || true
   "$ROOT/scripts/stop.sh"
   agent server "Cornelius, serveur du miroir" \
     "$NODE_BIN" --env-file-if-exists=.env --import tsx server/index.ts
   agent perception "Cornelius, perception locale (caméra, voix, vision)" \
     "$ROOT/.venv/bin/python" "$ROOT/perception/worker.py"
+  if [ -x .venv-voice/bin/mlx_audio.server ] && grep -q '^CORNELIUS_CONVERSATION=local' .env; then
+    VOICE_ENVIRONMENT="PHONEMIZER_ESPEAK_LIBRARY=$(espeak_library)"
+    agent voice "Cornelius, voix et transcription locales (mlx-audio)" \
+      "$ROOT/.venv-voice/bin/mlx_audio.server" --host 127.0.0.1 --port "$VOICE_PORT"
+    VOICE_ENVIRONMENT=""
+  else
+    rm -f "$agents/$LABEL.voice.plist"
+  fi
   echo "Services actifs. Journaux : $LOG_DIR"
 fi
 

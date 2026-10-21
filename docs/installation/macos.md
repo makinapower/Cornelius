@@ -35,7 +35,8 @@ Le script peut être relancé autant de fois que nécessaire. Il garde le fichie
 | `--wake` | Installe l’écoute locale du mot d’appel « Cornelius ». |
 | `--no-models` | Ne télécharge pas les modèles (visages, détection de la voix, vision 450M). |
 | `--no-build` | Ne compile pas l’interface. `scripts/start.sh` la compilera au premier démarrage. |
-| `--launchd` | Installe et démarre les deux services qui lancent Cornelius à l’ouverture de session. |
+| `--local` | Conversation 100 % locale : installe la voix et la transcription (mlx-audio) et choisit `CORNELIUS_CONVERSATION=local`. Le modèle de langage vient d’oMLX. Voir [Conversation locale](../fonctionnalites/conversation-locale.md). |
+| `--launchd` | Installe et démarre les services qui lancent Cornelius à l’ouverture de session. |
 | `-h`, `--help` | Affiche l’aide. |
 
 Voici ce que fait le script, dans l’ordre :
@@ -71,6 +72,7 @@ Avec `--launchd`, le script crée deux agents dans `~/Library/LaunchAgents/`, pu
 |---|---|---|
 | `fr.cornelius.server` | Le serveur : administration, page du miroir, conversation. Il lance lui-même le générateur d’images. | Relancé après 3 s. |
 | `fr.cornelius.perception` | La perception locale : caméra, détection de la voix, mot d’appel, vision. | Relancé après 3 s. |
+| `fr.cornelius.voice` | Avec `--local` seulement : transcription et voix locales (mlx-audio, port 8001). | Relancé après 3 s. |
 
 Ils démarrent à l’ouverture de votre session. Pour que le miroir démarre seul, activez l’ouverture de session automatique dans **Réglages Système → Utilisateurs et groupes**.
 

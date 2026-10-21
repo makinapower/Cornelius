@@ -45,6 +45,7 @@ fi
 
 # --- Perception locale (worker Python) -----------------------------------------------
 if [ "$perception" = 1 ]; then launch_perception; fi
+launch_voice
 
 echo
 status=0

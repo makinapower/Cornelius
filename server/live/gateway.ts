@@ -23,6 +23,8 @@ export interface LiveHandlers {
   failure(): void;
 }
 export interface LiveGateway {
+  /** Conversation locale : seulement `connect`, le serveur porte aussi le son du miroir. */
+  local?: boolean;
   hangup?(id: string): Promise<void>;
   /** Ouvre la connexion HTTPS que réutilisera la création de session, sans rien créer. */
   prewarm?(): Promise<void>;
