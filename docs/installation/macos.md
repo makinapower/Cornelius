@@ -111,6 +111,14 @@ Ouvrez `http://127.0.0.1:3000/admin`, puis **Activer et ouvrir le miroir** (rubr
 
 Depuis un autre appareil, utilisez `https://<adresse du Mac>:3443/` : au premier démarrage, macOS demande s’il faut accepter les connexions entrantes pour `node` ; acceptez-les. Voir [Accès depuis le réseau local](../utilisation/reseau-local.md).
 
+## Satellites audio et mDNS
+
+Sur Mac, le port mDNS (5353 en UDP) est déjà tenu par le service du système, mDNSResponder. Cornelius ne l’ouvre donc pas lui-même : il confie son annonce `_cornelius._tcp` à mDNSResponder avec la commande `dns-sd`, fournie avec macOS. Pour la vérifier :
+
+```sh
+dns-sd -B _cornelius._tcp
+```
+
 ## Vision locale et images
 
 - La vision locale tourne sur le processeur (graphes q4) : les puces Apple s’en sortent bien avec le modèle 450M.

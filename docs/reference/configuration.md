@@ -121,7 +121,7 @@ Ces variables existent dans le code, mais ne se mettent pas dans `.env` en usage
 | `3443` | Le même serveur en HTTPS, pour les autres appareils du réseau local. | `CORNELIUS_HTTPS_PORT` (désactivé par `CORNELIUS_LAN=0`) |
 | `5173` | L’interface en développement (Vite), avec rechargement à chaud. Lancée seulement par `scripts/dev.sh` ou `scripts\dev.ps1`. | fixe, dans `vite.config.ts` |
 | `3101` | Le serveur des tests navigateur. | `CORNELIUS_E2E_PORT` |
-| `5353` (UDP) | L’annonce mDNS de Cornelius, pour que les satellites audio le trouvent. | `CORNELIUS_MDNS` |
+| `5353` (UDP) | L’annonce mDNS de Cornelius, pour que les satellites audio le trouvent. Sous macOS, c’est le service du système (mDNSResponder) qui l’envoie, avec `dns-sd`. | `CORNELIUS_MDNS` |
 
 Les ports `3000` et `5173` n’écoutent que sur `127.0.0.1`. Seul le port `3443` est ouvert au réseau, en HTTPS : il refuse les adresses publiques (« Accès réservé au réseau local. ») et les noms d’hôte inconnus (« Hôte non autorisé. »), et réserve la perception et le générateur d’images à l’ordinateur lui-même.
 

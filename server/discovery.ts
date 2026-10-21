@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from 'node:child_process';
 import { hostname } from 'node:os';
 import { Bonjour } from 'bonjour-service';
 import { localAddresses } from './network.js';
@@ -20,7 +21,10 @@ export function announceSatellites(options: {
   port: number;
   keyFingerprint: string | null;
   onError?: (error: unknown) => void;
+  platform?: NodeJS.Platform;
+  spawnProcess?: typeof spawn;
 }): () => Promise<void> {
+  if ((options.platform ?? process.platform) === 'darwin') return announceWithDnsSd(options);
   let publishers = new Map<string, Bonjour>();
   const publish = (address: string) => {
     // Options transmises à multicast-dns (son type ne les déclare pas) : l’interface d’écoute.
@@ -35,11 +39,7 @@ export function announceSatellites(options: {
       port: options.port,
       // Le même nom est annoncé sur chaque interface : ce n’est pas un conflit à résoudre.
       probe: false,
-      txt: {
-        path: '/satellite',
-        protocol: String(SATELLITE_PROTOCOL),
-        ...(options.keyFingerprint ? { key: options.keyFingerprint } : {}),
-      },
+      txt: serviceText(options.keyFingerprint),
     });
     return bonjour;
   };
@@ -66,5 +66,53 @@ export function announceSatellites(options: {
     clearInterval(timer);
     await Promise.all([...publishers.values()].map(withdraw));
     publishers.clear();
+  };
+}
+
+/** Texte du service : chemin, version du protocole et empreinte de la clé. */
+function serviceText(keyFingerprint: string | null): Record<string, string> {
+  return {
+    path: '/satellite',
+    protocol: String(SATELLITE_PROTOCOL),
+    ...(keyFingerprint ? { key: keyFingerprint } : {}),
+  };
+}
+
+/**
+ * macOS : mDNSResponder occupe déjà le port 5353. L’annonce lui est confiée avec `dns-sd -R`,
+ * qui reste actif tant que le service est enregistré et suit lui-même les interfaces.
+ */
+function announceWithDnsSd(options: {
+  port: number;
+  keyFingerprint: string | null;
+  onError?: (error: unknown) => void;
+  spawnProcess?: typeof spawn;
+}): () => Promise<void> {
+  const text = Object.entries(serviceText(options.keyFingerprint)).map(([k, v]) => k + '=' + v);
+  const child: ChildProcess = (options.spawnProcess ?? spawn)(
+    '/usr/bin/dns-sd',
+    [
+      '-R',
+      'Cornelius ' + hostname(),
+      '_' + SATELLITE_SERVICE_TYPE + '._tcp',
+      'local',
+      String(options.port),
+      ...text,
+    ],
+    { stdio: 'ignore' },
+  );
+  let stopping = false;
+  child.on('error', (error) => options.onError?.(error));
+  child.on('exit', (code, signal) => {
+    if (!stopping)
+      options.onError?.(new Error(`dns-sd s’est arrêté (${signal ?? 'code ' + code}).`));
+  });
+  return async () => {
+    stopping = true;
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+      child.kill('SIGTERM');
+    });
   };
 }
