@@ -50,6 +50,7 @@ Cette page est l’index de la documentation. Elle indique par où commencer, pu
 - [La génération d’images](fonctionnalites/generation-d-images.md) : dessiner une image à la voix, sur l’ordinateur.
 - [Home Assistant](fonctionnalites/home-assistant.md) : lumières, prises et capteurs de la maison.
 - [Les agents Hermes](fonctionnalites/agents-hermes.md) : confier des demandes longues à un agent personnel.
+- [L’agent de code opencode](fonctionnalites/agent-opencode.md) : confier des demandes sur un projet de code, à la voix.
 
 ## Modules
 

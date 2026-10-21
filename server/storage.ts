@@ -31,7 +31,7 @@ import { dirname, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { memoryMigration } from './memory-store.js';
 import { homeAssistantMigration } from './home-assistant-store.js';
-import { agentsMigration } from './agents-store.js';
+import { agentKindMigration, agentsMigration } from './agents-store.js';
 import { addonRefsMigration } from './addons/migrations.js';
 import { adminPasswordMigration } from './admin-password.js';
 import { secretsMigration } from './secrets.js';
@@ -365,6 +365,7 @@ export const migrations: readonly string[] = [
   INSERT OR IGNORE INTO image_generation_provider (id) VALUES (1);`,
   // Satellites audio : micro et haut-parleur d’une autre pièce, associés dans l’administration.
   satellitesMigration,
+  agentKindMigration,
 ];
 
 /** The server owns this connection. Backups include WAL changes via SQLite itself. */

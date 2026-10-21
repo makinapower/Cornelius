@@ -2,7 +2,8 @@ import type { AgentCapability, AgentDiscovery, AgentTaskView } from '../shared/a
 import { agentTaskLabels } from '../shared/agents.js';
 import type { AddonHttpClient } from '../shared/addons.js';
 import { safeUrl } from './addons/http.js';
-import type { AgentConnection } from './agents-store.js';
+import type { AgentBackend, AgentRunState } from './agent-backend.js';
+import type { AgentConnection, AgentTask } from './agents-store.js';
 
 export const object = (value: unknown): Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -32,7 +33,7 @@ export function hermesUrl(raw: string): string {
   url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/v1$/, '');
   return url.href.replace(/\/+$/, '');
 }
-export class HermesClient {
+export class HermesClient implements AgentBackend {
   constructor(
     private readonly http: AddonHttpClient,
     private readonly now = Date.now,
@@ -216,5 +217,76 @@ export class HermesClient {
       );
     const last = messages.at(-1);
     return last ? this.redact(c, last.content) || null : null;
+  }
+  async submit(
+    c: AgentConnection,
+    task: AgentTask,
+    message: string,
+    _previous: AgentTask | null,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const data = await this.request(
+      c,
+      '/v1/runs',
+      {
+        input: message,
+        session_id: task.sessionId,
+        instructions:
+          'Réponds en français. La demande arrive via le miroir Cornelius. Donne une réponse claire, avec sources si utile. Gère tes actions, précisions et accords selon tes propres règles.',
+      },
+      signal,
+      task.id,
+    );
+    const runId = remoteId(data.run_id);
+    if (!runId) throw new HermesError('Identifiant de tâche Hermes manquant.');
+    return runId;
+  }
+  async status(
+    c: AgentConnection,
+    task: AgentTask,
+    latest: boolean,
+    signal?: AbortSignal,
+  ): Promise<AgentRunState> {
+    try {
+      const data = await this.request(c, '/v1/runs/' + task.runId, undefined, signal);
+      if (data.run_id && data.run_id !== task.runId)
+        throw new HermesError('Réponse Hermes hors de la tâche demandée.');
+      return this.parseRun(c, data);
+    } catch (error) {
+      // Hermes oublie une tâche finie : sa réponse reste dans l’historique de la conversation.
+      if (
+        !(error instanceof HermesError) ||
+        error.status !== 404 ||
+        task.status !== 'completed' ||
+        !latest
+      )
+        throw error;
+      return {
+        status: 'completed',
+        output: await this.history(c, task.sessionId, signal),
+        approval: null,
+        error: null,
+      };
+    }
+  }
+  async steer(c: AgentConnection, task: AgentTask, message: string, signal?: AbortSignal) {
+    await this.request(c, '/v1/runs/' + task.runId + '/steer', { input: message }, signal);
+  }
+  async stop(c: AgentConnection, task: AgentTask, signal?: AbortSignal) {
+    await this.request(c, '/v1/runs/' + task.runId + '/stop', {}, signal);
+  }
+  async approve(
+    c: AgentConnection,
+    task: AgentTask,
+    requestId: string,
+    choice: 'once' | 'deny',
+    signal?: AbortSignal,
+  ) {
+    await this.request(
+      c,
+      '/v1/runs/' + task.runId + '/approval',
+      { request_id: requestId, choice },
+      signal,
+    );
   }
 }

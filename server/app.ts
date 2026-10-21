@@ -65,6 +65,7 @@ import { HomeAssistantRepository } from './home-assistant-store.js';
 import { registerHomeAssistant } from './home-assistant-api.js';
 import { AgentRepository } from './agents-store.js';
 import { HermesClient } from './hermes-client.js';
+import { OpencodeClient } from './opencode-client.js';
 import { Agents } from './agents.js';
 import { registerAgents } from './agents-api.js';
 import { ImageGeneration } from './image-generation.js';
@@ -257,7 +258,12 @@ export async function createApp(
       ? mkdtempSync(join(tmpdir(), 'cornelius-images-'))
       : resolve('data', 'generated-images'),
   );
-  const agents = new Agents(new AgentRepository(db, now), new HermesClient(http, now), now);
+  const agents = new Agents(
+    new AgentRepository(db, now),
+    new HermesClient(http, now),
+    now,
+    new OpencodeClient(http, now),
+  );
   const initialKey = openaiKey();
   const makeImageCreator = options.openaiImageCreator ?? createOpenAIImageCreator;
   let openaiImageCreator = initialKey ? makeImageCreator(initialKey) : null;

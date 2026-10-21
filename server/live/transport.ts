@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { HomeAssistant } from '../home-assistant.js';
-import { sameScope, type Agents } from '../agents.js';
+import { agentText, sameScope, type Agents } from '../agents.js';
 import { agentTaskLabels, type AgentTaskView } from '../../shared/agents.js';
 import type { DiagnosticLog } from '../logs.js';
 import type { PersonalMemory } from '../memory.js';
@@ -278,7 +278,8 @@ export class LiveTransport implements SessionTransport {
       addons?: AddonToolBridge;
       actions?: ActionToolBridge;
       homeAssistant?: Pick<HomeAssistant, 'tools' | 'handles' | 'run'>;
-      agents?: Pick<Agents, 'tools' | 'handles' | 'run' | 'received'>;
+      agents?: Pick<Agents, 'tools' | 'handles' | 'run' | 'received'> &
+        Partial<Pick<Agents, 'kindOf'>>;
       imageGeneration?: ImageGenerationToolBridge;
       personality?: (profileId: string | null) => PersonalityPreferences;
     } = {},
@@ -1308,6 +1309,8 @@ export class LiveTransport implements SessionTransport {
     const state = this.controller.snapshot().state;
     if (state.voice.phase !== 'idle' || this.now() - this.lastAgentAnnouncementAt < 8000)
       return false;
+    // Les textes nomment l’agent relié à la personne (Hermes ou opencode).
+    const kind = this.integrations.agents?.kindOf?.(profileId);
     const description = (
       task.output ??
       task.approval?.description ??
@@ -1317,7 +1320,7 @@ export class LiveTransport implements SessionTransport {
     const card: LunaCardRequest = {
       schemaVersion: 1,
       cardType: 'luna',
-      title: 'Hermes · ' + agentTaskLabels[task.status],
+      title: agentText('Hermes · ', kind) + agentTaskLabels[task.status],
       primaryValue: null,
       subtitle: null,
       description,
@@ -1328,7 +1331,7 @@ export class LiveTransport implements SessionTransport {
     if (!this.controller.showCard(active.scope, callId, card, this.now() + 60_000)) return false;
     this.announce(active, {
       ...card,
-      description:
+      description: agentText(
         task.status === 'waiting_for_approval'
           ? 'Hermes demande votre accord. La demande est disponible dans l’administration, rubrique Agents.'
           : task.status === 'completed'
@@ -1336,6 +1339,8 @@ export class LiveTransport implements SessionTransport {
             : task.status === 'cancelled'
               ? 'Hermes indique que la tâche a été annulée. Son état est affiché.'
               : 'Hermes n’a pas pu terminer une tâche. Le détail est affiché.',
+        kind,
+      ),
     });
     this.lastAgentAnnouncementAt = this.now();
     return true;

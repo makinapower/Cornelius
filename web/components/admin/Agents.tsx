@@ -3,8 +3,12 @@ import { Tabs } from 'radix-ui';
 import { Bot, Cable, ListChecks, MessageSquare, UserPlus } from 'lucide-react';
 import type { Profile } from '../../../shared/types';
 import {
+  AGENT_KINDS,
+  agentKindLabels,
   agentTaskLabels,
+  agentText,
   type AgentAdminView,
+  type AgentKind,
   type AgentConnectionView,
   type AgentTaskView,
 } from '../../../shared/agents';
@@ -23,6 +27,9 @@ import { Alert, AlertDescription } from '../ui/alert';
 import { NativeSelect, NativeSelectOption } from '../ui/native-select';
 
 function connectionFeedback(view: AgentAdminView): string {
+  return agentText(hermesFeedback(view), view.connection.kind);
+}
+function hermesFeedback(view: AgentAdminView): string {
   const discovery = view.connection.discovery;
   if (!discovery) return 'Configuration enregistrée. Connexion pas encore vérifiée.';
   if (!discovery.available)
@@ -41,7 +48,9 @@ export function agentState(connection: AgentConnectionView): {
   available: boolean;
 } {
   const discovery = connection.discovery;
-  if (!connection.hasToken) return { label: 'À configurer', available: false };
+  // Le mot de passe d’opencode est facultatif ; le jeton de Hermes, non.
+  if (!connection.url || (connection.kind === 'hermes' && !connection.hasToken))
+    return { label: 'À configurer', available: false };
   if (!connection.enabled) return { label: 'Désactivé', available: false };
   if (!discovery) return { label: 'Connexion à vérifier', available: false };
   if (!discovery.available) return { label: 'Connexion indisponible', available: false };
@@ -77,6 +86,32 @@ function HermesIntro() {
               <span className="pt-0.5">{step}</span>
             </li>
           ))}
+        </ol>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Ce qu’est opencode et comment le relier. */
+function OpencodeIntro() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Relier opencode</CardTitle>
+        <CardDescription>
+          opencode est un agent de code installé à part, sur ce Mac ou un autre. Cornelius lui
+          confie des demandes sur un projet (« corrige le bug du formulaire », « ajoute un test »)
+          et vous rapporte son résumé. opencode continue quand vous quittez le miroir.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ol className="space-y-2 text-sm list-decimal pl-5">
+          <li>
+            Dans le dossier du projet, lancez <code>opencode serve --hostname 0.0.0.0</code> (port
+            4096), avec un mot de passe dans <code>OPENCODE_SERVER_PASSWORD</code>.
+          </li>
+          <li>Choisissez « opencode », collez l’adresse et le mot de passe dans « Connexion ».</li>
+          <li>Autorisez Cornelius à contacter l’agent, puis « Enregistrer et vérifier ».</li>
         </ol>
       </CardContent>
     </Card>
@@ -126,6 +161,7 @@ export function Agents({ profiles, run }: { profiles: Profile[]; run: RunAction 
 }
 function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
   const [view, setView] = useState<AgentAdminView | null>(null);
+  const [kind, setKind] = useState<AgentKind>('hermes');
   const [url, setUrl] = useState('');
   const [token, setToken] = useState('');
   const [description, setDescription] = useState('');
@@ -145,6 +181,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
   const accept = (next: AgentAdminView) => {
     setView(next);
     setTaskId((current) => (next.tasks.some((t) => t.id === current) ? current : ''));
+    setKind(next.connection.kind);
     setUrl(next.connection.url);
     setToken('');
     setDescription(next.connection.description);
@@ -193,7 +230,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
     setVerifyError('');
     try {
       const next = save
-        ? await api.saveAgent(profile.id, { url, token, description, enabled, revision })
+        ? await api.saveAgent(profile.id, { kind, url, token, description, enabled, revision })
         : await api.discoverAgent(profile.id);
       if (save) accept(next);
       else setView(next);
@@ -205,7 +242,8 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
   };
   useUnsavedChanges(
     !!view &&
-      (url !== view.connection.url ||
+      (kind !== view.connection.kind ||
+        url !== view.connection.url ||
         !!token ||
         description !== view.connection.description ||
         enabled !== view.connection.enabled),
@@ -224,9 +262,17 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
   const skills = discovery?.capabilities.filter((a) => a.kind === 'skill') ?? [];
   const taskLabel = (t: AgentTaskView) =>
     'Demande du ' + formatWhen(t.createdAt) + ' · ' + agentTaskLabels[t.status];
-  const ready = c.enabled && c.hasToken;
+  const ready = c.enabled && agentState(c).label !== 'À configurer';
+  // Le nom de l’agent choisi dans le formulaire, sinon celui enregistré.
+  const name = agentKindLabels[kind];
+  const named = (text: string) => agentText(text, kind);
   const state = agentState(c);
-  const dirty = url !== c.url || !!token || description !== c.description || enabled !== c.enabled;
+  const dirty =
+    kind !== c.kind ||
+    url !== c.url ||
+    !!token ||
+    description !== c.description ||
+    enabled !== c.enabled;
   const matches = (a: (typeof toolsets)[number]) =>
     [a.name, a.description, ...a.tools]
       .join(' ')
@@ -252,18 +298,20 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
           <AlertDescription>{error || pollError}</AlertDescription>
         </Alert>
       )}
-      {!c.hasToken && <HermesIntro />}
+      {!c.url && (kind === 'opencode' ? <OpencodeIntro /> : <HermesIntro />)}
       <section
         className="rounded-xl border border-primary/20 bg-primary/5 p-5 space-y-4"
-        aria-label="Vue d’ensemble de Hermes"
+        aria-label={named('Vue d’ensemble de Hermes')}
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <Bot className="size-8 shrink-0 text-primary" aria-hidden="true" />
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold break-words">Hermes {ofName(profile.name)}</h2>
+              <h2 className="text-lg font-semibold break-words">
+                {name} {ofName(profile.name)}
+              </h2>
               <p className="text-sm text-muted-foreground">
-                Vos demandes continuent dans Hermes quand vous quittez le miroir.
+                Vos demandes continuent dans {name} quand vous quittez le miroir.
               </p>
             </div>
           </div>
@@ -332,7 +380,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
             <CardHeader>
               <CardTitle>Connexion et délégation</CardTitle>
               <CardDescription>
-                Cornelius transmet vos demandes à votre agent et vous restitue ses réponses. Hermes
+                Cornelius transmet vos demandes à votre agent et vous restitue ses réponses. {name}
                 gère ses outils, ses actions et ses demandes d’accord.
               </CardDescription>
             </CardHeader>
@@ -345,27 +393,54 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                 }}
               >
                 <Field
+                  id="agent-kind"
+                  label="Type d’agent"
+                  help={
+                    'Hermes : agent personnel (agenda, recherches). opencode : agent de code, qui travaille dans un projet. Changer de type oublie les demandes en cours dans Cornelius.'
+                  }
+                >
+                  <NativeSelect
+                    id="agent-kind"
+                    value={kind}
+                    onChange={(e) => setKind(e.target.value as AgentKind)}
+                  >
+                    {AGENT_KINDS.map((value) => (
+                      <NativeSelectOption key={value} value={value}>
+                        {agentKindLabels[value]}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </Field>
+                <Field
                   id="agent-url"
-                  label="Adresse de Hermes"
-                  help="Adresse du serveur API de votre agent, avec le préfixe de son profil si nécessaire."
+                  label={named('Adresse de Hermes')}
+                  help={
+                    kind === 'opencode'
+                      ? 'Adresse de « opencode serve » : http://<machine>:4096.'
+                      : 'Adresse du serveur API de votre agent, avec le préfixe de son profil si nécessaire.'
+                  }
                 >
                   <Input
                     id="agent-url"
                     type="url"
                     required
                     maxLength={2048}
-                    placeholder="http://127.0.0.1:8642"
+                    placeholder={
+                      kind === 'opencode' ? 'http://127.0.0.1:4096' : 'http://127.0.0.1:8642'
+                    }
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                   />
                 </Field>
                 <Field
                   id="agent-token"
-                  label="Jeton de connexion"
+                  label={kind === 'opencode' ? 'Mot de passe (facultatif)' : 'Jeton de connexion'}
                   help={
                     c.hasToken
                       ? 'Le jeton enregistré est masqué. Saisissez un nouveau jeton uniquement pour le remplacer ; laissez vide pour le conserver à la même adresse.'
-                      : 'Le jeton API configuré dans Hermes.'
+                      : kind === 'opencode'
+                        ? 'OPENCODE_SERVER_PASSWORD d’opencode, obligatoire quand il écoute sur le réseau. « utilisateur:mot de passe » si OPENCODE_SERVER_USERNAME est changé.'
+                        : named('Le jeton API configuré dans Hermes.')
                   }
                 >
                   <Input
@@ -373,13 +448,21 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                     type="password"
                     autoComplete="new-password"
                     placeholder={
-                      c.hasToken ? 'Jeton enregistré (masqué)' : 'Saisir le jeton Hermes'
+                      c.hasToken
+                        ? kind === 'opencode'
+                          ? 'Mot de passe enregistré (masqué)'
+                          : 'Jeton enregistré (masqué)'
+                        : named('Saisir le jeton Hermes')
                     }
                     maxLength={4096}
                     value={token}
                     onChange={(e) => setToken(e.target.value)}
                   />
-                  {c.hasToken && <Badge variant="secondary">Jeton enregistré</Badge>}
+                  {c.hasToken && (
+                    <Badge variant="secondary">
+                      {kind === 'opencode' ? 'Mot de passe enregistré' : 'Jeton enregistré'}
+                    </Badge>
+                  )}
                 </Field>
                 <Field
                   id="agent-description"
@@ -401,8 +484,8 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                   <Switch id="agent-enabled" checked={enabled} onCheckedChange={setEnabled} />
                 </div>
                 <p className="text-xs leading-relaxed text-muted-foreground">
-                  Utilisez l’agent ou le profil Hermes propre à cette personne. Les demandes
-                  confiées à Hermes et ses réponses suivent aussi ses réglages de conservation. Le
+                  Utilisez l’agent ou le profil {name} propre à cette personne. Les demandes
+                  confiées à {name} et ses réponses suivent aussi ses réglages de conservation. Le
                   jeton reste sur le serveur Cornelius.
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
@@ -411,7 +494,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                       ? 'Enregistrement et vérification…'
                       : 'Enregistrer et vérifier'}
                   </Button>
-                  {c.hasToken && (
+                  {!!c.url && (
                     <Button
                       type="button"
                       variant="danger-outline"
@@ -424,7 +507,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                   <span
                     role="status"
                     className={
-                      'ml-auto text-sm text-warning ' + (dirty && c.hasToken ? '' : 'invisible')
+                      'ml-auto text-sm text-warning ' + (dirty && !!c.url ? '' : 'invisible')
                     }
                   >
                     Modifications non enregistrées.
@@ -432,7 +515,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                 </div>
                 {verifyError && !checking ? (
                   <Alert
-                    aria-label="État de la connexion Hermes"
+                    aria-label={named('État de la connexion Hermes')}
                     role="alert"
                     variant="destructive"
                   >
@@ -441,12 +524,16 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                 ) : checking ? (
                   <p role="status" className="text-sm text-muted-foreground">
                     {checking === 'save'
-                      ? 'Enregistrement de la configuration et vérification de la connexion à Hermes…'
-                      : 'Vérification de la connexion et actualisation des capacités Hermes…'}
+                      ? named(
+                          'Enregistrement de la configuration et vérification de la connexion à Hermes…',
+                        )
+                      : named(
+                          'Vérification de la connexion et actualisation des capacités Hermes…',
+                        )}
                   </p>
-                ) : c.hasToken ? (
+                ) : !!c.url ? (
                   <Alert
-                    aria-label="État de la connexion Hermes"
+                    aria-label={named('État de la connexion Hermes')}
                     role={discovery && !discovery.available ? 'alert' : 'status'}
                     variant={discovery && !discovery.available ? 'destructive' : 'default'}
                   >
@@ -459,13 +546,13 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                   <AlertDescription>
                     <p>
                       Retirer cette connexion et ses références de tâches du miroir ? Les tâches et
-                      l’historique restent dans Hermes.
+                      l’historique restent dans {name}.
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
                         variant="destructive"
                         onClick={() =>
-                          void perform('Connexion Hermes retirée.', async () => {
+                          void perform(named('Connexion Hermes retirée.'), async () => {
                             accept(await api.removeAgent(profile.id, revision));
                             setRemoving(false);
                           })
@@ -510,7 +597,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                     ))}
                     <p>
                       Les capacités déjà reçues restent utilisables. Réessayez après avoir vérifié
-                      Hermes.
+                      {name}.
                     </p>
                   </AlertDescription>
                 </Alert>
@@ -571,7 +658,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                 <Fold summary={`Compétences installées (${skills.length})`}>
                   <p className="text-xs text-muted-foreground">
                     Une compétence peut nécessiter un service ou un compte supplémentaire dans
-                    Hermes.
+                    {name}.
                   </p>
                   {filteredSkills.map((a, i) => (
                     <div key={a.name + i} className="mt-3 break-words">
@@ -593,7 +680,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
               )}
               <Button
                 variant="outline"
-                disabled={!c.hasToken || checking !== null}
+                disabled={!!!c.url || checking !== null}
                 onClick={() => void verify(false)}
               >
                 {checking === 'discover' ? 'Vérification en cours…' : 'Actualiser les capacités'}
@@ -604,9 +691,9 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
         <Tabs.Content value="requests" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Échanger avec Hermes</CardTitle>
+              <CardTitle>Échanger avec {name}</CardTitle>
               <CardDescription>
-                Essayez une demande ici ou parlez au miroir. Les tâches continuent dans Hermes quand
+                Essayez une demande ici ou parlez au miroir. Les tâches continuent dans {name} quand
                 vous quittez le miroir.
               </CardDescription>
             </CardHeader>
@@ -615,7 +702,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                 className="space-y-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void perform('Demande transmise à Hermes.', async () => {
+                  void perform(named('Demande transmise à Hermes.'), async () => {
                     const response = await api.messageAgent(profile.id, message, taskId || null);
                     if (response.status === 'failed' || response.status === 'unknown')
                       throw new Error(response.summary);
@@ -640,7 +727,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                     ))}
                   </NativeSelect>
                 </Field>
-                <Field id="agent-message" label="Message à Hermes">
+                <Field id="agent-message" label={named('Message à Hermes')}>
                   <Textarea
                     id="agent-message"
                     ref={messageInput}
@@ -653,7 +740,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                 </Field>
                 {!ready && (
                   <p className="text-sm text-muted-foreground">
-                    Enregistrez la connexion et autorisez Cornelius à contacter Hermes dans l’onglet
+                    Enregistrez la connexion et autorisez Cornelius à contacter {name} dans l’onglet
                     Connexion.
                   </p>
                 )}
@@ -675,7 +762,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                   </p>
                 )}
                 <Button type="submit" disabled={!ready || !discovery?.available || !message.trim()}>
-                  Envoyer à Hermes
+                  Envoyer à {name}
                 </Button>
               </form>
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -684,7 +771,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                   variant="outline"
                   disabled={!ready}
                   onClick={() =>
-                    void perform('Tâches Hermes actualisées.', async () =>
+                    void perform(named('Tâches Hermes actualisées.'), async () =>
                       setView(await api.refreshAgent(profile.id)),
                     )
                   }
@@ -735,7 +822,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                     <div
                       tabIndex={0}
                       role="region"
-                      aria-label="Résultat Hermes"
+                      aria-label={named('Résultat Hermes')}
                       className="max-h-80 overflow-y-auto rounded-md bg-muted/40 p-3 whitespace-pre-wrap break-words text-sm"
                     >
                       {t.output}
@@ -744,12 +831,12 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                   {t.status === 'completed' && !t.output && !t.error && (
                     <p className="text-sm text-muted-foreground">
                       Résultat à récupérer : utilisez « Actualiser les tâches » pour le relire dans
-                      Hermes.
+                      {name}.
                     </p>
                   )}
                   {t.approval && (
                     <div className="space-y-3 rounded-lg bg-muted p-3">
-                      <p className="text-sm font-medium">Hermes demande votre accord</p>
+                      <p className="text-sm font-medium">{name} demande votre accord</p>
                       <p className="text-sm whitespace-pre-wrap wrap-anywhere">
                         {t.approval.description}
                       </p>
@@ -758,7 +845,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                           <Button
                             disabled={!ready}
                             onClick={() =>
-                              void perform('Décision transmise à Hermes.', async () => {
+                              void perform(named('Décision transmise à Hermes.'), async () => {
                                 await api.approveAgent(profile.id, t.id, t.approval!.id, 'once');
                                 setView(await api.agent(profile.id));
                               })
@@ -770,7 +857,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                             variant="outline"
                             disabled={!ready}
                             onClick={() =>
-                              void perform('Refus transmis à Hermes.', async () => {
+                              void perform(named('Refus transmis à Hermes.'), async () => {
                                 await api.approveAgent(profile.id, t.id, t.approval!.id, 'deny');
                                 setView(await api.agent(profile.id));
                               })
@@ -780,13 +867,13 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                           </Button>
                         </div>
                       ) : (
-                        <p className="text-sm">Donnez votre accord directement dans Hermes.</p>
+                        <p className="text-sm">Donnez votre accord directement dans {name}.</p>
                       )}
                     </div>
                   )}
                   {t.status === 'waiting_for_approval' && !t.approval && (
                     <p className="text-sm">
-                      Consultez la demande d’accord directement dans Hermes.
+                      Consultez la demande d’accord directement dans {name}.
                     </p>
                   )}
                   <div className="flex flex-wrap gap-2">
@@ -811,7 +898,7 @@ function AgentPanel({ profile, run }: { profile: Profile; run: RunAction }) {
                         variant="outline"
                         disabled={!ready}
                         onClick={() =>
-                          void perform('Arrêt demandé à Hermes.', async () => {
+                          void perform(named('Arrêt demandé à Hermes.'), async () => {
                             await api.stopAgent(profile.id, t.id);
                             setView(await api.agent(profile.id));
                           })
