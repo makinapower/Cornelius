@@ -30,7 +30,7 @@ Ne publiez jamais ce fichier : il contient le mot de passe et les clés. Il est 
 |---|---|---|---|
 | `OPENAI_API_KEY` | vide | Clé de l’API OpenAI, valeur de secours : une clé saisie dans **Mise en route → Clés et jetons** passe avant. Sans clé, aucune conversation ne s’ouvre et la mémoire ne retient rien. La rubrique **Mise en route** affiche alors l’étape **Clé OpenAI** à faire. | serveur |
 | `CORNELIUS_ADMIN_PASSWORD` | `cornelius` (écrit par `npm run setup`) | Mot de passe de départ de l’administration, 4 caractères au moins. Un mot de passe choisi dans **Mise en route** le remplace (seule son empreinte est gardée en base). Le serveur refuse de démarrer sans lui. Tant qu’il vaut `cornelius`, la **Mise en route** demande de le changer. | serveur |
-| `CORNELIUS_CONVERSATION` | `openai` | `local` : la conversation passe par des modèles qui tournent sur la machine (LLM oMLX, transcription et voix mlx-audio) au lieu d’OpenAI, sans clé. Les variables `CORNELIUS_LOCAL_*` sont décrites dans [Conversation locale](../fonctionnalites/conversation-locale.md#réglages). | serveur |
+| `CORNELIUS_CONVERSATION` | `openai` | `local` : la conversation passe par des modèles qui tournent sur la machine (LLM oMLX, transcription et voix mlx-audio) au lieu d’OpenAI, sans clé. Transcription et voix peuvent aussi venir de Whisper et Piper de Home Assistant (Wyoming, adresses `tcp://`). Les variables `CORNELIUS_LOCAL_*` sont décrites dans [Conversation locale](../fonctionnalites/conversation-locale.md#réglages). | serveur |
 | `CORNELIUS_LOGIN_RATE_LIMIT` | `10` | Nombre de tentatives de connexion à l’administration permises par minute. Entier de 1 ou plus. | serveur |
 
 ## Serveur et base de données

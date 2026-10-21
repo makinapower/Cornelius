@@ -3,15 +3,25 @@ import type { SessionConfig } from 'openai/resources/live/live';
 import type { ConnectClientEvent, ConnectServerEvent } from 'openai/resources/live/sideband';
 import type { DiagnosticLog } from '../logs.js';
 import type { LiveAudioConnection, LiveGateway, LiveHandlers } from './gateway.js';
+import { wyomingAddress, wyomingSynthesize, wyomingTranscribe } from './wyoming.js';
 
 /**
- * Conversation 100 % locale : transcription, modèle de langage et voix servis par des API
- * compatibles OpenAI sur la machine (oMLX pour le LLM, mlx-audio pour la parole, par exemple).
+ * Conversation 100 % locale : modèle de langage servi par une API compatible OpenAI (oMLX),
+ * transcription et voix par une API compatible OpenAI (mlx-audio) ou par Wyoming
+ * (`tcp://hôte:port` : Whisper et Piper de Home Assistant), sur la machine ou le réseau local.
  */
 export interface LocalConversationConfig {
   llm: { baseUrl: string; model: string | null; apiKey: string | null };
-  stt: { baseUrl: string; model: string; language: string };
-  tts: { baseUrl: string; model: string; voice: string; langCode: string | null; speed: number };
+  /** `model` vide : celui du serveur Wyoming. */
+  stt: { baseUrl: string; model: string | null; language: string };
+  /** `voice` vide : la voix par défaut du serveur Wyoming (Piper). */
+  tts: {
+    baseUrl: string;
+    model: string;
+    voice: string | null;
+    langCode: string | null;
+    speed: number;
+  };
 }
 
 const off = (value: string | undefined) =>
@@ -25,6 +35,8 @@ export function localConversationConfig(
   if ((env.CORNELIUS_CONVERSATION ?? 'openai').trim().toLowerCase() !== 'local') return null;
   const audio = trimSlash(env.CORNELIUS_LOCAL_AUDIO_URL || 'http://127.0.0.1:8001/v1');
   const speed = Number(env.CORNELIUS_LOCAL_TTS_SPEED ?? 1);
+  const stt = trimSlash(env.CORNELIUS_LOCAL_STT_URL || audio);
+  const tts = trimSlash(env.CORNELIUS_LOCAL_TTS_URL || audio);
   return {
     llm: {
       baseUrl: trimSlash(env.CORNELIUS_LOCAL_LLM_URL || 'http://127.0.0.1:8000/v1'),
@@ -32,15 +44,16 @@ export function localConversationConfig(
       apiKey: env.CORNELIUS_LOCAL_LLM_API_KEY?.trim() || null,
     },
     stt: {
-      baseUrl: trimSlash(env.CORNELIUS_LOCAL_STT_URL || audio),
+      baseUrl: stt,
       model:
-        env.CORNELIUS_LOCAL_STT_MODEL?.trim() || 'mlx-community/whisper-large-v3-turbo-asr-fp16',
+        env.CORNELIUS_LOCAL_STT_MODEL?.trim() ||
+        (wyomingAddress(stt) ? null : 'mlx-community/whisper-large-v3-turbo-asr-fp16'),
       language: env.CORNELIUS_LOCAL_STT_LANGUAGE?.trim() || 'fr',
     },
     tts: {
-      baseUrl: trimSlash(env.CORNELIUS_LOCAL_TTS_URL || audio),
+      baseUrl: tts,
       model: env.CORNELIUS_LOCAL_TTS_MODEL?.trim() || 'mlx-community/Kokoro-82M-bf16',
-      voice: env.CORNELIUS_LOCAL_TTS_VOICE?.trim() || 'ff_siwis',
+      voice: env.CORNELIUS_LOCAL_TTS_VOICE?.trim() || (wyomingAddress(tts) ? null : 'ff_siwis'),
       langCode: off(env.CORNELIUS_LOCAL_TTS_LANG_CODE)
         ? null
         : env.CORNELIUS_LOCAL_TTS_LANG_CODE?.trim() || 'f',
@@ -392,13 +405,20 @@ class LocalSession implements LiveAudioConnection {
   }
 
   private async transcribe(pcm: Buffer): Promise<string> {
+    const wyoming = wyomingAddress(this.config.stt.baseUrl);
+    if (wyoming)
+      return wyomingTranscribe(wyoming, pcm, {
+        language: this.config.stt.language,
+        model: this.config.stt.model,
+        signal: this.abort.signal,
+      });
     const form = new FormData();
     form.append(
       'file',
       new Blob([new Uint8Array(encodeWav(pcm, INPUT_RATE))], { type: 'audio/wav' }),
       'parole.wav',
     );
-    form.append('model', this.config.stt.model);
+    if (this.config.stt.model) form.append('model', this.config.stt.model);
     form.append('language', this.config.stt.language);
     form.append('response_format', 'json');
     const response = await this.deps.fetch(this.config.stt.baseUrl + '/audio/transcriptions', {
@@ -561,6 +581,29 @@ class LocalSession implements LiveAudioConnection {
   private async speak(sentence: string) {
     const text = sentence.trim();
     if (!text || this.closed) return;
+    const { pcm, rate } = await this.synthesize(text);
+    if (this.closed) return;
+    const samples = resample(pcm, rate, this.outputRate);
+    const start = Math.max(this.elapsed(), this.playbackEnd - this.startedAt);
+    this.emit({
+      type: 'session.output_transcript.delta',
+      event_id: 'evt_' + randomUUID(),
+      item_id: 'item_' + randomUUID(),
+      delta: text + ' ',
+      start_ms: start,
+      end_ms: start + (samples.length / this.outputRate) * 1000,
+    });
+    this.play(Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength));
+  }
+
+  /** Voix d’une phrase : Piper par Wyoming, ou WAV d’une API compatible OpenAI. */
+  private async synthesize(text: string): Promise<{ pcm: Int16Array; rate: number }> {
+    const wyoming = wyomingAddress(this.config.tts.baseUrl);
+    if (wyoming)
+      return wyomingSynthesize(wyoming, text, {
+        voice: this.config.tts.voice,
+        signal: this.abort.signal,
+      });
     const response = await this.deps.fetch(this.config.tts.baseUrl + '/audio/speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -576,19 +619,7 @@ class LocalSession implements LiveAudioConnection {
     });
     if (!response.ok)
       throw new Error('Synthèse vocale locale refusée (HTTP ' + response.status + ').');
-    const { pcm, rate } = decodeWav(Buffer.from(await response.arrayBuffer()));
-    if (this.closed) return;
-    const samples = resample(pcm, rate, this.outputRate);
-    const start = Math.max(this.elapsed(), this.playbackEnd - this.startedAt);
-    this.emit({
-      type: 'session.output_transcript.delta',
-      event_id: 'evt_' + randomUUID(),
-      item_id: 'item_' + randomUUID(),
-      delta: text + ' ',
-      start_ms: start,
-      end_ms: start + (samples.length / this.outputRate) * 1000,
-    });
-    this.play(Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength));
+    return decodeWav(Buffer.from(await response.arrayBuffer()));
   }
 
   /** Envoie la voix au rythme de la lecture, avec un peu d’avance. */
