@@ -98,6 +98,8 @@ interface ActiveSession {
   connection?: LiveConnection;
   /** Satellite audio de la conversation : le serveur porte le son sur un WebSocket principal. */
   satelliteId: string | null;
+  /** Conversation locale du miroir : micro et voix passent par le WebSocket /audio. */
+  browserLocal: boolean;
   audio?: LiveAudioConnection;
   /** Semi-duplex : le micro du satellite est rendu muet tant que Cornelius parle. */
   echoUntil: number;
@@ -198,6 +200,8 @@ const SATELLITE_ECHO_GUARD_MS = 600;
 const SATELLITE_EXCLUDED_TOOLS = /^(vision|image)__/u;
 const ANONYMOUS_EXCLUDED_TOOLS = /^memory__/u;
 
+// Voix de la conversation locale vers le miroir : PCM16 mono 24 kHz.
+export const LOCAL_BROWSER_AUDIO_RATE = 24_000;
 // Sous le délai de conservation des connexions HTTP inactives de Node (4 s).
 const prewarmIntervalMs = 3000;
 
@@ -214,6 +218,31 @@ export class LiveTransport implements SessionTransport {
   private vision: VisionToolBridge | null = null;
   private memory: PersonalMemory | null = null;
   private satelliteOutput: ((satelliteId: string, pcm: Buffer) => void) | null = null;
+  private browserOutput: ((interactionId: string, pcm: Buffer) => void) | null = null;
+  /** Voix de la conversation locale vers le miroir (WebSocket /audio de l’interaction). */
+  attachBrowserOutput(output: (interactionId: string, pcm: Buffer) => void) {
+    this.browserOutput = output;
+  }
+  /** Conversation locale : le micro du miroir, reçu par /audio, part vers le moteur local. */
+  browserAudio(interactionId: string, pcm: Buffer): void {
+    const active = this.active;
+    if (
+      !active?.audio ||
+      !active.browserLocal ||
+      active.scope.interactionId !== interactionId ||
+      !active.attached ||
+      active.closing ||
+      active.finalized ||
+      active.blocked ||
+      this.isBlocked()
+    )
+      return;
+    active.audio.sendAudio(pcm);
+  }
+  /** Conversation tenue par le moteur local plutôt que par OpenAI. */
+  isLocal(): boolean {
+    return this.gateway?.local === true;
+  }
   /** Son de Cornelius vers le satellite de la conversation, au rythme où Live le produit. */
   attachSatelliteOutput(output: (satelliteId: string, pcm: Buffer) => void) {
     this.satelliteOutput = output;
@@ -312,6 +341,7 @@ export class LiveTransport implements SessionTransport {
       scope: { ...scope },
       abort: new AbortController(),
       satelliteId: satellite?.id ?? null,
+      browserLocal: false,
       echoUntil: 0,
       blocked: false,
       attached: false,
@@ -347,13 +377,14 @@ export class LiveTransport implements SessionTransport {
       },
       { once: true },
     );
-    if (satellite) this.connectSatellite(active);
+    if (satellite) this.connectServerAudio(active, true);
   }
   /**
-   * Conversation d’un satellite : pas de navigateur pour négocier WebRTC, le serveur ouvre
-   * lui-même la session Live sur un WebSocket principal, en voix seule et sans identité.
+   * Session ouverte par le serveur sur un WebSocket principal, sans WebRTC : conversation d’un
+   * satellite (voix seule, sans identité), ou conversation locale du miroir (le son passe par
+   * le WebSocket /audio du navigateur).
    */
-  private connectSatellite(active: ActiveSession) {
+  private connectServerAudio(active: ActiveSession, satellite: boolean) {
     const gateway = this.gateway;
     if (!gateway?.connect) {
       queueMicrotask(() => this.controller.close('Clé OpenAI absente.'));
@@ -361,15 +392,22 @@ export class LiveTransport implements SessionTransport {
     }
     // Profil rattaché au satellite (choisi dans l’administration), ou conversation anonyme.
     const profileId = this.controller.snapshot().state.activeProfile?.id ?? null;
-    const { client: _client, audio, ...config } = this.configuration(profileId, true);
+    const { client: _client, audio, ...config } = this.configuration(profileId, satellite);
     active.toolsProfileId = profileId;
+    active.browserLocal = !satellite;
     // Mémoire personnelle seulement au nom d’un profil : une conversation anonyme ne laisse rien.
-    if (profileId) this.memory?.open(active.scope);
-    this.logs?.write('info', 'openai', 'Session Live du satellite demandée', {
-      interactionId: active.scope.interactionId,
-    });
+    if (profileId || !satellite) this.memory?.open(active.scope);
+    this.logs?.write(
+      'info',
+      'openai',
+      satellite ? 'Session Live du satellite demandée' : 'Session locale du miroir demandée',
+      { interactionId: active.scope.interactionId },
+    );
+    const format = satellite
+      ? SATELLITE_AUDIO_FORMAT
+      : ({ type: 'audio/pcm', rate: LOCAL_BROWSER_AUDIO_RATE } as const);
     const connection = gateway.connect(
-      { ...config, audio: { ...audio, format: SATELLITE_AUDIO_FORMAT } },
+      { ...config, audio: { ...audio, format } as typeof audio },
       {
         open: () => {},
         event: (event) => {
@@ -380,7 +418,10 @@ export class LiveTransport implements SessionTransport {
             active.mediaConnected = true;
             active.remoteId = event.session.id ?? undefined;
             if (active.closing) this.send(active, { type: 'session.close' });
-            else this.controller.controlAttached(active.scope);
+            else {
+              this.controller.controlAttached(active.scope);
+              if (!satellite) this.identify(active.scope);
+            }
           }
           this.receive(active, event);
         },
@@ -388,7 +429,11 @@ export class LiveTransport implements SessionTransport {
           if (this.disposed || this.active !== active || active.finalized) return;
           if (active.closing) this.finalize(active);
           else {
-            this.controller.close('Session Live du satellite interrompue.');
+            this.controller.close(
+              satellite
+                ? 'Session Live du satellite interrompue.'
+                : 'Conversation locale interrompue.',
+            );
             this.controller.publish();
           }
         },
@@ -427,7 +472,8 @@ export class LiveTransport implements SessionTransport {
       this.integrations.personality?.(profileId),
       this.controller.snapshot().state.delegationMode,
       {
-        webSearch: this.controller.isWebSearchEnabled(),
+        // La recherche web passe par OpenAI : elle n’existe pas dans la conversation locale.
+        webSearch: !this.isLocal() && this.controller.isWebSearchEnabled(),
         voice: this.controller.getSpeechVoice(),
         voiceOnly,
       },
@@ -525,6 +571,16 @@ export class LiveTransport implements SessionTransport {
     if (!gateway) throw new Error('Clé OpenAI absente.');
     if (active.offer && active.offer !== sdp) throw new Error('Une offre média existe déjà.');
     if (active.response) return active.response;
+    // Conversation locale : pas de WebRTC, le serveur ouvre la session et porte le son.
+    if (gateway.local) {
+      active.offer = sdp;
+      this.connectServerAudio(active, false);
+      active.response = Promise.resolve({
+        local: true,
+        session: { id: active.scope.interactionId },
+      } as unknown as LiveCreateResponse);
+      return active.response;
+    }
     this.logs?.write('info', 'openai', 'Offre média reçue', { interactionId: scope.interactionId });
     active.offer = sdp;
     this.memory?.open(active.scope);
@@ -876,6 +932,12 @@ export class LiveTransport implements SessionTransport {
       if (typeof delta === 'string' && delta.length <= 262_144)
         this.satelliteOutput?.(active.satelliteId, Buffer.from(delta, 'base64'));
       if (audibleLiveOutput(event)) active.echoUntil = this.now() + SATELLITE_ECHO_GUARD_MS;
+    }
+    // Conversation locale du miroir : la voix part par le WebSocket /audio.
+    if (active.browserLocal && String(object(event).type ?? '') === 'session.output_audio.delta') {
+      const delta = object(event).delta;
+      if (typeof delta === 'string' && delta.length <= 262_144)
+        this.browserOutput?.(active.scope.interactionId!, Buffer.from(delta, 'base64'));
     }
     // Le calcul d’énergie ne sert qu’à la minuterie de silence (mode voix ou option).
     if (

@@ -74,6 +74,11 @@ export function createAudioSession(
   let pcm: WebSocket | null = null;
   let unsubscribePcm: (() => void) | null = null;
   let disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // Conversation locale : la voix arrive en PCM16 par le WebSocket /audio, sans WebRTC.
+  let localRate = 24000;
+  let localOutput: MediaStreamAudioDestinationNode | null = null;
+  let localPlayhead = 0;
+  const localSources = new Set<AudioBufferSourceNode>();
   let disposed = false;
   let closing = false;
   let failed = false;
@@ -99,7 +104,31 @@ export function createAudioSession(
     microphone?.getTracks().forEach((track) => {
       track.enabled = false;
     });
+    localSources.forEach((source) => source.stop());
+    localSources.clear();
     audio.pause();
+  };
+  /** Joue une trame de voix locale à la suite des précédentes, vers la sortie choisie. */
+  const playLocal = (data: ArrayBuffer) => {
+    if (disposed || closing || data.byteLength < 2) return;
+    if (!localOutput) {
+      localOutput = context.createMediaStreamDestination();
+      audio.srcObject = localOutput.stream;
+      if (enabled) playOutput();
+    }
+    const pcm = new Int16Array(data);
+    const buffer = context.createBuffer(1, pcm.length, localRate);
+    const channel = buffer.getChannelData(0);
+    for (let index = 0; index < pcm.length; index++) channel[index] = pcm[index]! / 32768;
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(localOutput);
+    source.connect(outputMeter);
+    localPlayhead = Math.max(localPlayhead, context.currentTime + 0.05);
+    source.start(localPlayhead);
+    localPlayhead += buffer.duration;
+    localSources.add(source);
+    source.onended = () => localSources.delete(source);
   };
   const status = (type: 'connected' | 'started') =>
     request('/api/media/status', {
@@ -258,6 +287,7 @@ export function createAudioSession(
         '/audio?interactionId=' +
         encodeURIComponent(scope.interactionId!),
     );
+    pcm.binaryType = 'arraybuffer';
     pcm.onopen = () =>
       reportDiagnostic(
         'connected',
@@ -271,9 +301,13 @@ export function createAudioSession(
       else fail(new Error('Flux audio local VAD fermé'));
     };
     pcm.onmessage = ({ data }) => {
-      if (!advancedBuffer || typeof data !== 'string') return;
+      if (data instanceof ArrayBuffer) return playLocal(data);
+      if (typeof data !== 'string') return;
       try {
-        if (JSON.parse(data)?.type === 'audio_catchup') {
+        const message = JSON.parse(data);
+        if (message?.type === 'audio_format' && Number.isFinite(message.rate))
+          localRate = message.rate;
+        if (advancedBuffer && message?.type === 'audio_catchup') {
           connection.catchUpAudio();
           report('audio_buffer_catchup');
         }
@@ -309,12 +343,19 @@ export function createAudioSession(
       stage = 'création de session OpenAI via le serveur';
       report('start');
       remoteBeganAt = performance.now();
-      const answer = await request<{ transport: { sdp: string } }>('/api/media/offer', {
-        method: 'POST',
-        body: JSON.stringify({ scope, sdp }),
-        signal: abort.signal,
-      });
+      const answer = await request<{ transport?: { sdp: string }; local?: boolean }>(
+        '/api/media/offer',
+        { method: 'POST', body: JSON.stringify({ scope, sdp }), signal: abort.signal },
+      );
       measure('audio_reponse_serveur', performance.now() - remoteBeganAt);
+      if (answer.local) {
+        // Conversation locale : le micro et la voix passent déjà par /audio.
+        stage = 'conversation locale';
+        mediaReported = true;
+        if (!disposed && !closing) await status('connected');
+        return;
+      }
+      if (!answer.transport) throw new Error('Réponse WebRTC absente.');
       stage = 'application de la réponse WebRTC OpenAI';
       if (!disposed && !closing)
         await peer.setRemoteDescription({ type: 'answer', sdp: answer.transport.sdp });

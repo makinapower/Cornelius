@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { DiagnosticLog } from './logs.js';
 import { MemoryRepository } from './memory-store.js';
 import { PersonalMemory, type MemoryExtractor } from './memory.js';
-import { createMemoryExtractor } from './memory-extractor.js';
+import { createLocalMemoryExtractor, createMemoryExtractor } from './memory-extractor.js';
 import { registerMemory } from './memory-api.js';
 import { PersonalDataEraser } from './backups.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -44,6 +44,7 @@ import { SessionController } from './controller.js';
 import { DEFAULT_ADMIN_PASSWORD, type AppConfig } from './config.js';
 import { LiveTransport } from './live/transport.js';
 import { createLiveGateway } from './live/gateway.js';
+import { createLocalGateway } from './live/local-gateway.js';
 import { PerceptionBridge } from './perception.js';
 import { ModelDownloads, type ModelLauncher } from './model-downloads.js';
 import { VisionBridge } from './vision.js';
@@ -264,8 +265,14 @@ export async function createApp(
     creator: () => openaiImageCreator,
     blocked: () => preferences.getOpenAIBlocked(),
   });
+  // Conversation locale (CORNELIUS_CONVERSATION=local) : ni clé ni réseau vers OpenAI pour la voix.
+  const localConversation = config.localConversation ?? null;
   const live = new LiveTransport(
-    initialKey ? createLiveGateway(initialKey, logs) : null,
+    localConversation
+      ? createLocalGateway(localConversation, logs)
+      : initialKey
+        ? createLiveGateway(initialKey, logs)
+        : null,
     () => preferences.getOpenAIBlocked(),
     logs,
     {
@@ -278,19 +285,28 @@ export async function createApp(
     },
     now,
   );
-  logs.write(
-    !initialKey ? 'warn' : 'info',
-    'openai',
-    preferences.getOpenAIBlocked()
-      ? 'Connexions OpenAI bloquées par l’administration'
-      : initialKey
-        ? 'Clé configurée ; connexion uniquement au démarrage d’une session'
-        : 'Clé OpenAI absente',
-  );
+  if (localConversation)
+    logs.write('info', 'local', 'Conversation locale', {
+      llm: localConversation.llm.baseUrl,
+      modele: localConversation.llm.model ?? 'premier modèle servi',
+      transcription: localConversation.stt.baseUrl,
+      voix: localConversation.tts.baseUrl,
+    });
+  else
+    logs.write(
+      !initialKey ? 'warn' : 'info',
+      'openai',
+      preferences.getOpenAIBlocked()
+        ? 'Connexions OpenAI bloquées par l’administration'
+        : initialKey
+          ? 'Clé configurée ; connexion uniquement au démarrage d’une session'
+          : 'Clé OpenAI absente',
+    );
   const controller = new SessionController(profiles, live, now, preferences, (name, details) =>
     logs.write('info', 'mesure', name, details),
   );
-  controller.setSetup({ openaiKey: !!initialKey });
+  // En local, la conversation ne demande pas de clé : l’étape « clé » est considérée faite.
+  controller.setSetup({ openaiKey: !!localConversation || !!initialKey });
   imageGeneration.onActivity((activity) => controller.setImageActivity(activity));
   const ambient = new AmbientModules(
     addonRuntime,
@@ -307,7 +323,12 @@ export async function createApp(
   const memory = new PersonalMemory(
     new MemoryRepository(db, now),
     controller,
-    options.memoryExtractor ?? (initialKey ? createMemoryExtractor(initialKey) : null),
+    options.memoryExtractor ??
+      (localConversation
+        ? createLocalMemoryExtractor(localConversation.llm)
+        : initialKey
+          ? createMemoryExtractor(initialKey)
+          : null),
     now,
     logs,
   );
@@ -316,11 +337,14 @@ export async function createApp(
     const value = secretStore.get(name);
     logs.addSecret(value);
     if (name === 'OPENAI_API_KEY') {
-      live.setGateway(value ? createLiveGateway(value, logs) : null);
       openaiImageCreator = value ? makeImageCreator(value) : null;
-      if (!options.memoryExtractor)
-        memory.setExtractor(value ? createMemoryExtractor(value) : null);
-      controller.setSetup({ openaiKey: !!value });
+      // En local, la clé ne sert qu’aux images OpenAI : la conversation reste locale.
+      if (!localConversation) {
+        live.setGateway(value ? createLiveGateway(value, logs) : null);
+        if (!options.memoryExtractor)
+          memory.setExtractor(value ? createMemoryExtractor(value) : null);
+        controller.setSetup({ openaiKey: !!value });
+      }
     }
     logs.write('info', 'local', value ? 'Clé enregistrée' : 'Clé retirée', {
       name,
@@ -371,7 +395,7 @@ export async function createApp(
     const local = perception.snapshot();
     return {
       presenceTimings: controller.getPresenceTimings(),
-      apiConfigured: !!openaiKey(),
+      apiConfigured: !!localConversation || !!openaiKey(),
       perceptionConfigured: !!config.perceptionToken,
       defaultPassword: defaultPassword(),
       enrolledFaces: local.enrolledProfileIds.length,

@@ -30,6 +30,7 @@ Ne publiez jamais ce fichier : il contient le mot de passe et les clés. Il est 
 |---|---|---|---|
 | `OPENAI_API_KEY` | vide | Clé de l’API OpenAI, valeur de secours : une clé saisie dans **Mise en route → Clés et jetons** passe avant. Sans clé, aucune conversation ne s’ouvre et la mémoire ne retient rien. La rubrique **Mise en route** affiche alors l’étape **Clé OpenAI** à faire. | serveur |
 | `CORNELIUS_ADMIN_PASSWORD` | `cornelius` (écrit par `npm run setup`) | Mot de passe de départ de l’administration, 4 caractères au moins. Un mot de passe choisi dans **Mise en route** le remplace (seule son empreinte est gardée en base). Le serveur refuse de démarrer sans lui. Tant qu’il vaut `cornelius`, la **Mise en route** demande de le changer. | serveur |
+| `CORNELIUS_CONVERSATION` | `openai` | `local` : la conversation passe par des modèles qui tournent sur la machine (LLM oMLX, transcription et voix mlx-audio) au lieu d’OpenAI, sans clé. Transcription et voix peuvent aussi venir de Whisper et Piper de Home Assistant (Wyoming, adresses `tcp://`). Les variables `CORNELIUS_LOCAL_*` sont décrites dans [Conversation locale](../fonctionnalites/conversation-locale.md#réglages). | serveur |
 | `CORNELIUS_LOGIN_RATE_LIMIT` | `10` | Nombre de tentatives de connexion à l’administration permises par minute. Entier de 1 ou plus. | serveur |
 
 ## Serveur et base de données
@@ -121,6 +122,7 @@ Ces variables existent dans le code, mais ne se mettent pas dans `.env` en usage
 | `3443` | Le même serveur en HTTPS, pour les autres appareils du réseau local. | `CORNELIUS_HTTPS_PORT` (désactivé par `CORNELIUS_LAN=0`) |
 | `5173` | L’interface en développement (Vite), avec rechargement à chaud. Lancée seulement par `scripts/dev.sh` ou `scripts\dev.ps1`. | fixe, dans `vite.config.ts` |
 | `3101` | Le serveur des tests navigateur. | `CORNELIUS_E2E_PORT` |
+| `8000`, `8001` | Conversation locale seulement : le modèle de langage (oMLX) et la voix (mlx-audio), sur cet ordinateur. | `CORNELIUS_LOCAL_LLM_URL`, `CORNELIUS_LOCAL_AUDIO_URL` |
 | `5353` (UDP) | L’annonce mDNS de Cornelius, pour que les satellites audio le trouvent. Sous macOS, c’est le service du système (mDNSResponder) qui l’envoie, avec `dns-sd`. | `CORNELIUS_MDNS` |
 
 Les ports `3000` et `5173` n’écoutent que sur `127.0.0.1`. Seul le port `3443` est ouvert au réseau, en HTTPS : il refuse les adresses publiques (« Accès réservé au réseau local. ») et les noms d’hôte inconnus (« Hôte non autorisé. »), et réserve la perception et le générateur d’images à l’ordinateur lui-même.

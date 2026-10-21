@@ -173,6 +173,29 @@ launch_perception() {
   fi
 }
 
+# Serveur de voix de la conversation locale (mlx-audio), dans .venv-voice.
+VOICE_PORT=8001
+
+# Bibliothèque espeak-ng de Homebrew : phonèmes de la voix française de Kokoro.
+espeak_library() {
+  local file
+  for file in /opt/homebrew/lib/libespeak-ng.dylib /usr/local/lib/libespeak-ng.dylib; do
+    if [ -e "$file" ]; then echo "$file"; return; fi
+  done
+}
+
+# Voix locale, seulement si la conversation locale est choisie dans .env et installée.
+launch_voice() {
+  local server="$ROOT/.venv-voice/bin/mlx_audio.server"
+  [ -x "$server" ] && grep -q '^CORNELIUS_CONVERSATION=local' "$ROOT/.env" 2>/dev/null || return 0
+  if [ -n "$(worker_pids '.venv-voice/bin/mlx_audio.server')" ]; then
+    echo "Voix locale déjà active."
+  else
+    start_service voice env PHONEMIZER_ESPEAK_LIBRARY="$(espeak_library)" \
+      "$server" --host 127.0.0.1 --port "$VOICE_PORT"
+  fi
+}
+
 # Attend /api/health ; en cas d’échec, dit si le serveur s’est arrêté et affiche son journal.
 wait_server() {
   local port="$1" timeout="$2" code=0

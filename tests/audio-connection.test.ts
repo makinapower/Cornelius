@@ -18,7 +18,13 @@ import { flushDiagnostics } from '../web/diagnostics.js';
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 function fixture(t: TestContext) {
   const peers: Peer[] = [];
-  const sockets: { onclose: ((event: { code: number }) => void) | null }[] = [];
+  const sockets: {
+    onclose: ((event: { code: number }) => void) | null;
+    onmessage: ((event: { data: unknown }) => void) | null;
+    binaryType?: string;
+  }[] = [];
+  const played: { at: number; samples: number[]; rate: number }[] = [];
+  let localAnswer = false;
   const streams: MediaStream[] = [];
   const requests: { url: string; body: Record<string, unknown> }[] = [];
   const contexts: Context[] = [];
@@ -78,6 +84,26 @@ function fixture(t: TestContext) {
     }
     createGain() {
       return new Node();
+    }
+    currentTime = 0;
+    createBuffer(_channels: number, length: number, rate: number) {
+      const data = new Float32Array(length);
+      return { duration: length / rate, rate, getChannelData: () => data };
+    }
+    createBufferSource() {
+      const source = Object.assign(new Node(), {
+        buffer: null as null | { rate: number; getChannelData(): Float32Array },
+        onended: null,
+        start(at: number) {
+          played.push({
+            at,
+            rate: source.buffer!.rate,
+            samples: [...source.buffer!.getChannelData()],
+          });
+        },
+        stop() {},
+      });
+      return source;
     }
   }
   class Peer extends EventTarget {
@@ -163,6 +189,7 @@ function fixture(t: TestContext) {
       static OPEN = 1;
       readyState = 1;
       onclose: ((event: { code: number }) => void) | null = null;
+      onmessage: ((event: { data: unknown }) => void) | null = null;
       constructor() {
         sockets.push(this);
       }
@@ -171,7 +198,13 @@ function fixture(t: TestContext) {
     fetch: async (url: string, init: RequestInit) => {
       requests.push({ url, body: JSON.parse(String(init.body)) });
       return new Response(
-        JSON.stringify(url === '/api/media/offer' ? { transport: { sdp: 'answer' } } : {}),
+        JSON.stringify(
+          url === '/api/media/offer'
+            ? localAnswer
+              ? { local: true, session: { id: 'local' } }
+              : { transport: { sdp: 'answer' } }
+            : {},
+        ),
       );
     },
   })) {
@@ -192,6 +225,10 @@ function fixture(t: TestContext) {
   return {
     peers,
     sockets,
+    played,
+    answerLocally: () => {
+      localAnswer = true;
+    },
     streams,
     requests,
     statuses: () =>
@@ -440,4 +477,27 @@ test('un dépassement du tampon avant admission reste signalé au transfert', as
   connection.resetAudio();
   connection.onOverflow(() => warnings++);
   assert.equal(warnings, 1);
+});
+
+test('conversation locale : pas de WebRTC distant, voix reçue par /audio et jouée à la suite', async (t) => {
+  const f = fixture(t);
+  f.answerLocally();
+  await prepareAudio();
+  const failures: AudioFailure[] = [];
+  const audio = createAudioSession(scope, (kind) => failures.push(kind));
+  await flush();
+  const peer = f.peers.at(-1)!;
+  assert.equal(peer.remoteDescription, null, 'aucune réponse WebRTC à appliquer');
+  assert.deepEqual(f.statuses(), ['connected']);
+  const socket = f.sockets.at(-1)!;
+  assert.equal(socket.binaryType, 'arraybuffer');
+  socket.onmessage?.({ data: JSON.stringify({ type: 'audio_format', rate: 16000 }) });
+  socket.onmessage?.({ data: new Int16Array([16384, -16384]).buffer });
+  socket.onmessage?.({ data: new Int16Array([8192]).buffer });
+  assert.equal(f.played.length, 2);
+  assert.deepEqual(f.played[0]!.samples, [0.5, -0.5]);
+  assert.equal(f.played[0]!.rate, 16000);
+  assert.ok(f.played[1]!.at > f.played[0]!.at, 'les trames se suivent sans se chevaucher');
+  assert.equal(failures.length, 0);
+  audio.dispose();
 });

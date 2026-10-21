@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { externalAddonsRoot } from './addons/registry.js';
+import { localConversationConfig, type LocalConversationConfig } from './live/local-gateway.js';
 
 export interface AppConfig {
   databasePath: string;
@@ -31,6 +32,8 @@ export interface AppConfig {
   tlsFingerprint?: string;
   /** Empreinte de la clé publique : celle que vérifient les satellites audio. */
   tlsKeyFingerprint?: string;
+  /** Conversation locale (CORNELIUS_CONVERSATION=local) au lieu d’OpenAI Live. */
+  localConversation?: LocalConversationConfig | null;
 }
 
 /** Mot de passe écrit par `npm run setup` et `.env.example`, à changer après l’installation. */
@@ -70,6 +73,7 @@ export function loadConfig(): AppConfig & { port: number } {
       .map((host) => host.trim())
       .filter(Boolean),
     openaiKey: process.env.OPENAI_API_KEY || undefined,
+    localConversation: localConversationConfig(),
     perceptionToken: process.env.CORNELIUS_PERCEPTION_TOKEN || undefined,
     imageGenerationToken: process.env.CORNELIUS_IMAGE_GENERATION_TOKEN || undefined,
     meteoConceptToken: process.env.CORNELIUS_METEO_CONCEPT_TOKEN || undefined,
