@@ -28,6 +28,35 @@ Le serveur de Cornelius détecte la fin de chaque phrase, la fait transcrire, en
    L’option `--local` installe `espeak-ng` (phonèmes français de la voix Kokoro) et mlx-audio dans un environnement séparé, `.venv-voice`. Elle ajoute `CORNELIUS_CONVERSATION=local` à `.env` s’il n’y a pas déjà de choix. Avec `--launchd`, le serveur de voix devient un troisième service, `fr.cornelius.voice` ; sans lui, `scripts/start.sh` le lance avec le reste.
 3. Au premier usage, mlx-audio télécharge les modèles Whisper et Kokoro depuis Hugging Face : la première réponse peut donc prendre une minute.
 
+## oMLX sur une autre machine
+
+Le modèle de langage peut tourner sur un autre Mac de la maison, plus puissant que celui du miroir.
+
+1. Sur la machine d’oMLX, faites-le écouter sur le réseau. oMLX refuse de le faire sans clé d’API : choisissez-en une longue et aléatoire.
+
+   ```sh
+   OMLX_API_KEY=une-longue-cle-secrete omlx serve --host 0.0.0.0
+   ```
+
+   On peut aussi régler la clé puis l’adresse d’écoute dans l’administration d’oMLX (`http://<machine>:8000/admin`), dans cet ordre. Autorisez les connexions entrantes si le pare-feu de macOS le demande.
+2. Depuis le Mac du miroir, vérifiez qu’il répond :
+
+   ```sh
+   curl -H "Authorization: Bearer une-longue-cle-secrete" http://192.168.1.30:8000/v1/models
+   ```
+
+3. Dans le `.env` de Cornelius :
+
+   ```sh
+   CORNELIUS_CONVERSATION=local
+   CORNELIUS_LOCAL_LLM_URL=http://192.168.1.30:8000/v1
+   CORNELIUS_LOCAL_LLM_API_KEY=une-longue-cle-secrete
+   ```
+
+   La clé est masquée dans les journaux de Cornelius. Donnez de préférence une adresse fixe à cette machine dans votre box.
+
+Les requêtes passent en HTTP non chiffré sur le réseau de la maison : la conversation et les résultats des outils y circulent en clair. Gardez oMLX hors d’atteinte d’Internet (pas de redirection de port).
+
 ## Avec Whisper et Piper de Home Assistant
 
 Si Whisper et Piper tournent déjà pour l’assistant vocal de Home Assistant (modules complémentaires *Whisper* et *Piper*, ou conteneurs `wyoming-faster-whisper` et `wyoming-piper`), Cornelius peut s’en servir directement, sur le réseau local. Seul oMLX tourne alors sur le Mac : l’option `--local` de l’installateur et mlx-audio sont inutiles.
@@ -65,7 +94,7 @@ Tous les réglages sont dans `.env`, lus au démarrage du serveur :
 | `CORNELIUS_CONVERSATION` | `openai` | `local` choisit la conversation locale. |
 | `CORNELIUS_LOCAL_LLM_URL` | `http://127.0.0.1:8000/v1` | Adresse de l’API du modèle de langage (oMLX). |
 | `CORNELIUS_LOCAL_LLM_MODEL` | vide | Modèle à utiliser ; vide, le premier que liste le serveur. |
-| `CORNELIUS_LOCAL_LLM_API_KEY` | vide | Clé de l’API locale, si elle en demande une. |
+| `CORNELIUS_LOCAL_LLM_API_KEY` | vide | Clé de l’API (`OMLX_API_KEY` d’oMLX), obligatoire quand oMLX écoute sur le réseau. Envoyée en `Authorization: Bearer`, masquée dans les journaux. |
 | `CORNELIUS_LOCAL_AUDIO_URL` | `http://127.0.0.1:8001/v1` | Adresse commune de la transcription et de la voix (mlx-audio). |
 | `CORNELIUS_LOCAL_STT_URL`, `CORNELIUS_LOCAL_TTS_URL` | celle du dessus | Adresses séparées : `http://…/v1` (API compatible OpenAI) ou `tcp://hôte:port` (Wyoming : Whisper, Piper). |
 | `CORNELIUS_LOCAL_STT_MODEL` | `mlx-community/whisper-large-v3-turbo-asr-fp16` ; vide avec Wyoming | Modèle de transcription. Avec Wyoming, celui du service si vide. |
@@ -88,7 +117,9 @@ Tous les réglages sont dans `.env`, lus au démarrage du serveur :
 
 | Symptôme | Cause probable |
 |---|---|
-| « Erreur Live » dès la première phrase, journal « LLM local : réponse refusée » ou « injoignable » | oMLX n’est pas lancé, pas sur le port 8000, ou aucun modèle n’est chargé. |
+| « Erreur Live » dès la première phrase, journal « LLM local : réponse refusée » ou « injoignable » | oMLX n’est pas lancé, pas sur le port 8000, n’écoute pas sur le réseau (`--host 0.0.0.0`), ou aucun modèle n’est chargé. |
+| Journal « LLM local : clé refusée » | `CORNELIUS_LOCAL_LLM_API_KEY` ne correspond pas à la clé d’oMLX. |
+| Journal « LLM local sans réponse après 30 s » | La machine d’oMLX est en veille ou surchargée. |
 | Journal « Transcription locale refusée » ou « Synthèse vocale locale refusée » | mlx-audio n’est pas lancé (`data/run/logs/voice.err.log`), ou le modèle demandé n’a pas pu être téléchargé. |
 | Journal « Transcription Wyoming injoignable » ou « Synthèse vocale Wyoming injoignable » | Mauvaise adresse ou port fermé : vérifiez avec `nc -vz`, et que le module Whisper ou Piper tourne. |
 | « Synthèse vocale Wyoming : … » avec un nom de voix | La voix demandée n’existe pas dans Piper : laissez `CORNELIUS_LOCAL_TTS_VOICE` vide ou choisissez une voix française installée. |
