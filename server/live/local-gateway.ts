@@ -299,6 +299,8 @@ export interface LocalDependencies {
   now: () => number;
 }
 
+// Attente des en-têtes du LLM (prise en compte de la demande), réseau local compris.
+const LLM_HEADERS_TIMEOUT_MS = 30_000;
 const OUTPUT_CHUNK_MS = 100;
 const OUTPUT_LEAD_MS = 300;
 // Lecture du navigateur ou du satellite après le dernier son envoyé : le micro reste sourd.
@@ -437,18 +439,50 @@ class LocalSession implements LiveAudioConnection {
     if (this.config.llm.model) return Promise.resolve(this.config.llm.model);
     // Sans modèle choisi : le premier que sert le LLM local.
     this.model ??= (async () => {
-      const response = await this.deps.fetch(this.config.llm.baseUrl + '/models', {
-        headers: this.headers(),
-        signal: this.abort.signal,
-      });
-      if (!response.ok) throw new Error('LLM local injoignable (HTTP ' + response.status + ').');
+      const response = await this.llmFetch('/models', { headers: this.headers() });
       const body = (await response.json()) as { data?: { id?: unknown }[] };
       const id = body.data?.find((model) => typeof model.id === 'string')?.id;
       if (typeof id !== 'string')
         throw new Error('Aucun modèle chargé dans le LLM local (CORNELIUS_LOCAL_LLM_MODEL).');
       return id;
     })();
+    // Un échec (machine éteinte) n’empêche pas de réessayer à la phrase suivante.
+    this.model.catch(() => (this.model = null));
     return this.model;
+  }
+  /**
+   * Requête au LLM, local ou sur une autre machine du réseau : machine injoignable, clé
+   * refusée et attente sans réponse donnent un message clair. Le délai ne couvre que
+   * l’arrivée des en-têtes ; la réponse en flux peut ensuite durer.
+   */
+  private async llmFetch(path: string, init: RequestInit): Promise<Response> {
+    const url = this.config.llm.baseUrl + path;
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), LLM_HEADERS_TIMEOUT_MS);
+    timer.unref?.();
+    let response: Response;
+    try {
+      response = await this.deps.fetch(url, {
+        ...init,
+        signal: AbortSignal.any([this.abort.signal, timeout.signal]),
+      });
+    } catch (error) {
+      if (this.abort.signal.aborted) throw error;
+      throw new Error(
+        timeout.signal.aborted
+          ? 'LLM local sans réponse après ' + LLM_HEADERS_TIMEOUT_MS / 1000 + ' s (' + url + ').'
+          : 'LLM local injoignable (' +
+              url +
+              ') : vérifiez l’adresse et que oMLX écoute sur le réseau.',
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    if (response.status === 401 || response.status === 403)
+      throw new Error('LLM local : clé refusée (CORNELIUS_LOCAL_LLM_API_KEY).');
+    if (!response.ok)
+      throw new Error('LLM local : réponse refusée (HTTP ' + response.status + ').');
+    return response;
   }
   private headers(): Record<string, string> {
     return this.config.llm.apiKey ? { Authorization: 'Bearer ' + this.config.llm.apiKey } : {};
@@ -457,7 +491,7 @@ class LocalSession implements LiveAudioConnection {
   /** Un tour du modèle : la voix au fil des phrases, puis les outils demandés. */
   private async respond(): Promise<void> {
     const model = await this.resolveModel();
-    const response = await this.deps.fetch(this.config.llm.baseUrl + '/chat/completions', {
+    const response = await this.llmFetch('/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.headers() },
       body: JSON.stringify({
@@ -468,10 +502,8 @@ class LocalSession implements LiveAudioConnection {
         messages: [{ role: 'system', content: this.system() }, ...this.messages],
         ...(this.tools.length ? { tools: this.tools, tool_choice: 'auto' } : {}),
       }),
-      signal: this.abort.signal,
     });
-    if (!response.ok || !response.body)
-      throw new Error('LLM local : réponse refusée (HTTP ' + response.status + ').');
+    if (!response.body) throw new Error('LLM local : réponse vide.');
     let text = '';
     // Texte reçu mais pas encore dit : il part phrase par phrase.
     let pending = '';

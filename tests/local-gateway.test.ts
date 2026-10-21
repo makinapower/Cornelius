@@ -322,3 +322,44 @@ test('une panne du LLM local est signalée comme une erreur de session', async (
   assert.match(error.error.message, /HTTP 503/u);
   connection.dispose();
 });
+
+test('LLM sur une autre machine : clé envoyée, clé refusée et machine injoignable dites clairement', async () => {
+  const config = localConversationConfig({
+    CORNELIUS_CONVERSATION: 'local',
+    CORNELIUS_LOCAL_LLM_URL: 'http://192.168.1.30:8000/v1',
+    CORNELIUS_LOCAL_LLM_API_KEY: 'secret-omlx',
+  })!;
+  const run = async (answer: (url: string) => Response) => {
+    const seen: { url: string; authorization: string | null }[] = [];
+    const fetch = (async (input: string | URL, init?: RequestInit) => {
+      seen.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get('authorization'),
+      });
+      return answer(String(input));
+    }) as typeof globalThis.fetch;
+    const events: ConnectServerEvent[] = [];
+    const connection = createLocalGateway(config, undefined, { fetch, now: Date.now }).connect!(
+      { type: 'live' } as never,
+      { open: () => {}, event: (event) => events.push(event), failure: () => {} },
+    );
+    connection.send({ type: 'session.commentary.append', content: 'Démarre.' } as never);
+    for (let attempt = 0; attempt < 200 && !events.some((e) => e.type === 'error'); attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    connection.dispose();
+    const error = events.find((event) => event.type === 'error') as unknown as {
+      error: { message: string };
+    };
+    return { seen, message: error.error.message };
+  };
+  const refused = await run(() => new Response('', { status: 401 }));
+  assert.deepEqual(refused.seen[0], {
+    url: 'http://192.168.1.30:8000/v1/models',
+    authorization: 'Bearer secret-omlx',
+  });
+  assert.match(refused.message, /clé refusée/u);
+  const unreachable = await run(() => {
+    throw new TypeError('fetch failed');
+  });
+  assert.match(unreachable.message, /injoignable \(http:\/\/192\.168\.1\.30:8000\/v1\/models\)/u);
+});

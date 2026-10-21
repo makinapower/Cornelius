@@ -159,6 +159,7 @@ export async function createApp(
       imageGenerationToken,
       config.meteoConceptToken ?? '',
       config.primApiKey ?? '',
+      config.localConversation?.llm.apiKey ?? '',
     ],
   });
   logs.write('info', 'local', 'Démarrage du serveur');

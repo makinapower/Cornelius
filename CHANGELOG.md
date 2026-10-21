@@ -12,6 +12,7 @@ Le fonctionnement actuel est décrit dans la [documentation](docs/README.md). Ce
 
 - Conversation 100 % locale (`CORNELIUS_CONVERSATION=local`) : transcription Whisper et voix Kokoro par mlx-audio, modèle de langage par oMLX ou tout serveur compatible OpenAI. Le moteur local (`server/live/local-gateway.ts`) parle le même protocole que l’API Live : outils, cartes, mémoire et satellites fonctionnent sans changement. Voir [Conversation locale](docs/fonctionnalites/conversation-locale.md).
 - Whisper et Piper de Home Assistant utilisables directement par le protocole Wyoming (`CORNELIUS_LOCAL_STT_URL=tcp://…:10300`, `CORNELIUS_LOCAL_TTS_URL=tcp://…:10200`), sur le réseau local (`server/live/wyoming.ts`).
+- oMLX sur une autre machine du réseau : clé d’API masquée dans les journaux, messages clairs pour une machine injoignable, une clé refusée ou une attente de plus de 30 s.
 - Le miroir reçoit la voix locale par le WebSocket `/audio`, sans WebRTC.
 - Extraction des souvenirs par le modèle local.
 - `scripts/install-macos.sh --local` : mlx-audio dans `.venv-voice`, service `fr.cornelius.voice` ; `start.sh` et `stop.sh` gèrent ce serveur de voix.
