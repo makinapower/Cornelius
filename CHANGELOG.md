@@ -12,6 +12,7 @@ Le fonctionnement actuel est décrit dans la [documentation](docs/README.md). Ce
 
 - Installation sur Mac à puce Apple : `scripts/install-macos.sh` (Homebrew, Python 3.12, modèles, services launchd avec `--launchd`) et sa page [Installer sous macOS](docs/installation/macos.md).
 - Perception : caméras lues avec AVFoundation sous macOS, listées grâce à PyObjC (installé seulement sur Mac).
+- Annonce mDNS des satellites confiée à mDNSResponder (`dns-sd -R`) sous macOS, où le port 5353 est déjà occupé.
 
 **Modifié**
 

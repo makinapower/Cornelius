@@ -79,7 +79,7 @@ Les autres messages sont des objets JSON en texte, avec un champ `type`. Un mess
 
 ## Découverte
 
-Cornelius s’annonce sur le réseau local en mDNS, service `_cornelius._tcp`, sur le port HTTPS (3443), sur chacune de ses interfaces. Le texte du service donne `path=/satellite`, `protocol=1` et `key` (empreinte de la clé, à titre indicatif). `CORNELIUS_MDNS=0` retire l’annonce.
+Cornelius s’annonce sur le réseau local en mDNS, service `_cornelius._tcp`, sur le port HTTPS (3443), sur chacune de ses interfaces (sous macOS, par mDNSResponder avec `dns-sd -R`, puisqu’il occupe déjà le port 5353). Le texte du service donne `path=/satellite`, `protocol=1` et `key` (empreinte de la clé, à titre indicatif). `CORNELIUS_MDNS=0` retire l’annonce.
 
 Le satellite utilise l’adresse fixe qu’on lui a donnée, sinon celle trouvée par mDNS. L’ordinateur annonce toutes ses adresses : le satellite prend celle de son propre sous-réseau. Injoignable pendant 30 s, Cornelius est recherché de nouveau, adresse fixe comprise.
 
